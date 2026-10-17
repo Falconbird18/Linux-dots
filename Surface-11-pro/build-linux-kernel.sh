@@ -15,7 +15,7 @@ KERNEL_RELEASE="${KERNEL_VERSION}${CUSTOM_SUFFIX}"
 # Your ESP is mounted at /efi
 ESP="/efi"
 
-echo "=== [0/10] Cleaning up previous kernel installation ==="
+echo "=== [0/11] Cleaning up previous kernel installation ==="
 # Clean both possible places
 sudo rm -f /boot/vmlinuz-linux-surface11 \
            /boot/initramfs-linux-surface11.img \
@@ -34,13 +34,13 @@ if [ -d "/lib/modules/$KERNEL_RELEASE" ]; then
     echo "[+] Removed old module directory: /lib/modules/$KERNEL_RELEASE"
 fi
 
-echo "=== [1/10] Installing build dependencies ==="
+echo "=== [1/11] Installing build dependencies ==="
 sudo pacman -S --needed base-devel git bc pahole cpio libelf ncurses wget tar xz zstd python
 
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-echo "=== [2/10] Downloading Linux Kernel v$KERNEL_VERSION ==="
+echo "=== [2/11] Downloading Linux Kernel v$KERNEL_VERSION ==="
 MAJOR_VERSION=$(echo "$KERNEL_VERSION" | cut -d. -f1)
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR_VERSION}.x/linux-$KERNEL_VERSION.tar.xz"
 if [ ! -f "linux-$KERNEL_VERSION.tar.xz" ]; then
@@ -52,7 +52,7 @@ if [ ! -d "linux-$KERNEL_VERSION" ]; then
 fi
 cd "linux-$KERNEL_VERSION"
 
-echo "=== [3/10] Applying correct Surface Pro 11 SoundWire ghost-RT1320 quirk ==="
+echo "=== [3/11] Applying correct Surface Pro 11 SoundWire ghost-RT1320 quirk ==="
 python3 - << 'PYEOF'
 import re, sys
 
@@ -122,7 +122,7 @@ PYEOF
 touch drivers/soundwire/dmi-quirks.c
 
 
-echo "=== [4/10] Applying INT3472 POWER1 camera fix ==="
+echo "=== [4/11] Applying INT3472 POWER1 camera fix ==="
 python3 - <<'PYEOF'
 import sys
 from pathlib import Path
@@ -248,8 +248,60 @@ PYEOF
 touch drivers/platform/x86/intel/int3472/discrete.c
 touch include/linux/platform_data/x86/int3472.h
 
+echo "[5/11] Applying OV13858 camera fixes..."
 
-echo "=== [5/10] Preparing Kernel Configuration ==="
+cd "$HOME/surface-kernel-build/linux-7.2.9"
+
+OV13858_FIXED=0
+IPU_BRIDGE_FIXED=0
+
+grep -q 'ov13858_supply_names' drivers/media/i2c/ov13858.c &&
+    OV13858_FIXED=1
+
+grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' \
+    drivers/media/pci/intel/ipu-bridge.c &&
+    IPU_BRIDGE_FIXED=1
+
+if [[ "$OV13858_FIXED" -eq 1 && "$IPU_BRIDGE_FIXED" -eq 1 ]]; then
+    echo "Both OV13858 camera fixes are already present; skipping."
+elif [[ "$OV13858_FIXED" -eq 1 || "$IPU_BRIDGE_FIXED" -eq 1 ]]; then
+    echo "ERROR: Only one camera fix is present."
+    echo "Refusing to continue with a partially patched source tree."
+    exit 1
+else
+    PATCH_DIR="$(mktemp -d)"
+
+    OV13858_PATCH="$PATCH_DIR/ov13858-power.patch"
+    IPU_BRIDGE_PATCH="$PATCH_DIR/ipu-bridge-ov13858.patch"
+
+    curl -fL \
+        "https://patch.msgid.link/20260831130312.26296-1-lsa.uz@pm.me" \
+        -o "$OV13858_PATCH"
+
+    curl -fL \
+        "https://patch.msgid.link/20260919070837.92720-1-lsa.uz@pm.me" \
+        -o "$IPU_BRIDGE_PATCH"
+
+    # Validate both patches before changing either source file.
+    git apply --check "$OV13858_PATCH"
+    git apply --check "$IPU_BRIDGE_PATCH"
+
+    git apply "$OV13858_PATCH"
+    git apply "$IPU_BRIDGE_PATCH"
+
+    rm -rf "$PATCH_DIR"
+
+    echo "OV13858 power sequencing and IPU bridge fixes applied."
+fi
+
+# Verify both changes are present.
+grep -q 'ov13858_supply_names' drivers/media/i2c/ov13858.c
+grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' \
+    drivers/media/pci/intel/ipu-bridge.c
+
+echo "Camera source patches verified."
+
+echo "=== [6/11] Preparing Kernel Configuration ==="
 if [ -f .config ]; then
     echo "[+] Existing .config found, keeping current configuration."
 elif [ -f /proc/config.gz ]; then
@@ -274,7 +326,7 @@ scripts/config --module CONFIG_SND_SOC_SOF_SOUNDWIRE || true
 
 make olddefconfig
 
-echo "=== [6/10] Incremental compile ==="
+echo "=== [7/11] Incremental compile ==="
 # Force rebuild of the changed SoundWire file
 rm -f drivers/soundwire/dmi-quirks.o drivers/soundwire/dmi-quirks.o.cmd \
       drivers/soundwire/built-in.a drivers/soundwire/modules.order 2>/dev/null || true
@@ -282,10 +334,10 @@ rm -f drivers/soundwire/dmi-quirks.o drivers/soundwire/dmi-quirks.o.cmd \
 echo "[*] Compiling (incremental – only changed objects will be rebuilt)..."
 make -j$(nproc)
 
-echo "=== [7/10] Installing modules ==="
+echo "=== [8/11] Installing modules ==="
 sudo make modules_install
 
-echo "=== [8/10] Installing kernel image to ESP ($ESP) ==="
+echo "=== [9/11] Installing kernel image to ESP ($ESP) ==="
 ACTUAL_KERNEL_RELEASE=$(make -s kernelrelease)
 echo "[*] Actual kernelrelease: $ACTUAL_KERNEL_RELEASE"
 
@@ -299,7 +351,7 @@ sudo cp -v arch/x86/boot/bzImage "$ESP/vmlinuz-linux-surface11"
 sudo cp -v System.map           "$ESP/System.map-linux-surface11"
 sudo cp -v .config              "$ESP/config-linux-surface11"
 
-echo "=== [9/10] Generating initramfs ==="
+echo "=== [10/11] Generating initramfs ==="
 if command -v dracut &>/dev/null; then
     echo "[*] Using dracut..."
     sudo dracut --force "$ESP/initramfs-linux-surface11.img" "$ACTUAL_KERNEL_RELEASE"
@@ -311,7 +363,7 @@ else
     exit 1
 fi
 
-echo "=== [10/10] Creating systemd-boot entry ==="
+echo "=== [11/11] Creating systemd-boot entry ==="
 sudo mkdir -p "$ESP/loader/entries"
 
 ROOT_PARTUUID=$(findmnt -n -o PARTUUID /)
