@@ -69,7 +69,7 @@ format = "[ $symbol($version) ]($style)"
 [python]
 symbol = " "
 style = "bg:magenta fg:bright-yellow"
-format = '[[ $symbol($version)(\($virtualenv\)) ]($style)]'
+format = '[$symbol($version) (\($virtualenv\))]($style) '
 
 [rust]
 symbol = " "
