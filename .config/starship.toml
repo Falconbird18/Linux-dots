@@ -1,105 +1,98 @@
-format = """
-[◖](fg:#12de52)$os$username[◗](bg:#12de52 fg:#12de52)$directory[◗](fg:#12de52 bg:#e06f12)$git_branch$git_status[◗](fg:#e06f12 bg:#e06f12)$c$elixir$elm$golang$gradle$haskell$java$julia$nodejs$nim$rust$scala[◗](fg:#e06f12 bg:#e06f12)$docker_context[◗](fg:#e06f12 bg:#e06f12)$time[◗ ](fg:#e06f12)"""
 
-[username]
-show_always = true
-style_user = "bg:#12de52"
-style_root = "bg:#12de52"
-format = '[$user ]($style)'
-disabled = false
+"$schema" = 'https://starship.rs/config-schema.json'
+
+add_newline = false
+
+format = """
+[](fg:blue)\
+$os\
+$username\
+[](fg:blue bg:bright-black)\
+$directory\
+[](fg:bright-black bg:cyan)\
+$git_branch\
+$git_status\
+[](fg:cyan bg:magenta)\
+$nodejs\
+$python\
+$rust\
+$golang\
+[](fg:magenta bg:yellow)\
+$cmd_duration\
+[](fg:yellow bg:green)\
+$time\
+[](fg:green)\
+$character"""
 
 [os]
-style = "bg:#12de52"
-disabled = true
+disabled = false
+style = "bg:blue fg:bright-white"
+format = "[$symbol]($style)"
+
+[os.symbols]
+Arch = "󰣇 "
+Ubuntu = "󰕈 "
+Macos = "󰀵 "
+Windows = " "
+Linux = "󰌽 "
+NixOS = " "
+Fedora = "󰣛 "
+Debian = "󰣚 "
+
+[username]
+show_always = false
+style_user = "bg:blue fg:bright-white"
+style_root = "bg:red fg:bright-white"
+format = "[ $user ]($style)"
 
 [directory]
-style = "bg:#12de52"
-format = "[ $path ]($style)"
+style = "bg:bright-black fg:bright-cyan"
+format = "[  $path ]($style)"
 truncation_length = 3
 truncation_symbol = "…/"
-
-[directory.substitutions]
-"Documents" = "󰈙 "
-"Downloads" = " "
-"Music" = " "
-"Pictures" = " "
-
-[c]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
-
-[docker_context]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol $context ]($style)'
-
-[elixir]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
-
-[elm]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
+home_symbol = " "
 
 [git_branch]
-symbol = ""
-style = "bg:#e06f12"
-format = '[ $symbol $branch ]($style)'
+symbol = " "
+style = "bg:cyan fg:bright-black"
+format = "[ $symbol$branch ]($style)"
 
 [git_status]
-style = "bg:#e06f12"
-format = '[$all_status$ahead_behind ]($style)'
-
-[golang]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
-
-[gradle]
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
-
-[haskell]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
-
-[java]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
-
-[julia]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
+style = "bg:cyan fg:bright-red"
+format = '[$all_status$ahead_behind]($style)'
 
 [nodejs]
-symbol = ""
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
+symbol = " "
+style = "bg:magenta fg:bright-white"
+format = "[ $symbol($version) ]($style)"
 
-[nim]
-symbol = "󰆥 "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
+[python]
+symbol = " "
+style = "bg:magenta fg:bright-yellow"
+format = '[[ $symbol($version)(\($virtualenv\)) ]($style)]'
 
 [rust]
-symbol = ""
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
+symbol = " "
+style = "bg:magenta fg:bright-white"
+format = "[ $symbol($version) ]($style)"
 
-[scala]
-symbol = " "
-style = "bg:#86BBD8"
-format = '[ $symbol ($version) ]($style)'
+[golang]
+symbol = " "
+style = "bg:magenta fg:bright-cyan"
+format = "[ $symbol($version) ]($style)"
+
+[cmd_duration]
+min_time = 500
+style = "bg:yellow fg:bright-black"
+format = "[  $duration ]($style)"
 
 [time]
 disabled = false
-time_format = "%R"
-style = "bg:#e06f12"
-format = '[ ♥ $time ]($style)'
-#This config was auto generated!
+time_format = "%H:%M"
+style = "bg:green fg:bright-black"
+format = "[  $time ]($style)"
+
+[character]
+success_symbol = "[❯](bold bright-green)"
+error_symbol = "[❯](bold bright-red)"
+vimcmd_symbol = "[❮](bold bright-yellow)"
