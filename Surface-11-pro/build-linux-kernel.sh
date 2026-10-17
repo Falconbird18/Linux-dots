@@ -248,58 +248,93 @@ PYEOF
 touch drivers/platform/x86/intel/int3472/discrete.c
 touch include/linux/platform_data/x86/int3472.h
 
-echo "[5/11] Applying OV13858 camera fixes..."
 
-cd "$HOME/surface-kernel-build/linux-7.2.9"
+# [5/11] Apply OV13858 camera power and IPU bridge fixes
+echo "=== [5/11] Applying OV13858 camera fixes ==="
 
-OV13858_FIXED=0
-IPU_BRIDGE_FIXED=0
+OV_FILE="drivers/media/i2c/ov13858.c"
+BRIDGE_FILE="drivers/media/pci/intel/ipu-bridge.c"
 
-grep -q 'ov13858_supply_names' drivers/media/i2c/ov13858.c &&
-    OV13858_FIXED=1
-
-grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' \
-    drivers/media/pci/intel/ipu-bridge.c &&
-    IPU_BRIDGE_FIXED=1
-
-if [[ "$OV13858_FIXED" -eq 1 && "$IPU_BRIDGE_FIXED" -eq 1 ]]; then
-    echo "Both OV13858 camera fixes are already present; skipping."
-elif [[ "$OV13858_FIXED" -eq 1 || "$IPU_BRIDGE_FIXED" -eq 1 ]]; then
-    echo "ERROR: Only one camera fix is present."
-    echo "Refusing to continue with a partially patched source tree."
-    exit 1
+if grep -q 'ov13858_supply_names' "$OV_FILE" &&
+   grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' "$BRIDGE_FILE"; then
+    echo "[+] Both OV13858 fixes are already present."
 else
+    if grep -q 'ov13858_supply_names' "$OV_FILE"; then
+        echo "[-] OV13858 power fix is present, but bridge fix is missing."
+        exit 1
+    fi
+
+    if grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' "$BRIDGE_FILE"; then
+        echo "[-] Bridge fix is present, but OV13858 power fix is missing."
+        exit 1
+    fi
+
     PATCH_DIR="$(mktemp -d)"
+    trap 'rm -rf "$PATCH_DIR"' EXIT
 
-    OV13858_PATCH="$PATCH_DIR/ov13858-power.patch"
-    IPU_BRIDGE_PATCH="$PATCH_DIR/ipu-bridge-ov13858.patch"
+    echo "[+] Downloading OV13858 power patch..."
+    curl --fail --location --retry 3 \
+        "https://lore-kernel.gnuweeb.org/linux-media/20260831130312.26296-1-lsa.uz@pm.me/raw" \
+        -o "$PATCH_DIR/ov13858-power.eml"
 
-    curl -fL \
-        "https://patch.msgid.link/20260831130312.26296-1-lsa.uz@pm.me" \
-        -o "$OV13858_PATCH"
+    git mailinfo "$PATCH_DIR/ov13858-power.msg" \
+        "$PATCH_DIR/ov13858-power.patch" \
+        < "$PATCH_DIR/ov13858-power.eml" >/dev/null
 
-    curl -fL \
-        "https://patch.msgid.link/20260919070837.92720-1-lsa.uz@pm.me" \
-        -o "$IPU_BRIDGE_PATCH"
+    if [[ ! -s "$PATCH_DIR/ov13858-power.patch" ]]; then
+        echo "[-] OV13858 patch extraction failed."
+        exit 1
+    fi
 
-    # Validate both patches before changing either source file.
-    git apply --check "$OV13858_PATCH"
-    git apply --check "$IPU_BRIDGE_PATCH"
+    echo "[+] Checking OV13858 patch..."
+    git apply --check "$PATCH_DIR/ov13858-power.patch"
 
-    git apply "$OV13858_PATCH"
-    git apply "$IPU_BRIDGE_PATCH"
+    echo "[+] Applying OV13858 power patch..."
+    git apply "$PATCH_DIR/ov13858-power.patch"
+
+    echo "[+] Adding OV13858 IPU bridge entry..."
+    python3 - <<'PYEOF'
+from pathlib import Path
+import sys
+
+path = Path("drivers/media/pci/intel/ipu-bridge.c")
+text = path.read_text()
+
+entry = 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)'
+if entry in text:
+    print("[+] IPU bridge entry already present.")
+    sys.exit(0)
+
+anchor = '\t/* Omnivision OV13B10 */'
+if text.count(anchor) != 1:
+    sys.exit("[-] Could not find a unique OV13B10 anchor in ipu-bridge.c.")
+
+text = text.replace(
+    anchor,
+    '\t/* Omnivision OV13858 */\n'
+    '\tIPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000),\n'
+    + anchor,
+    1,
+)
+path.write_text(text)
+print("[+] IPU bridge entry inserted.")
+PYEOF
 
     rm -rf "$PATCH_DIR"
-
-    echo "OV13858 power sequencing and IPU bridge fixes applied."
+    trap - EXIT
 fi
 
-# Verify both changes are present.
-grep -q 'ov13858_supply_names' drivers/media/i2c/ov13858.c
-grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' \
-    drivers/media/pci/intel/ipu-bridge.c
+grep -q 'ov13858_supply_names' "$OV_FILE" || {
+    echo "[-] OV13858 power patch verification failed."
+    exit 1
+}
 
-echo "Camera source patches verified."
+grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' "$BRIDGE_FILE" || {
+    echo "[-] IPU bridge patch verification failed."
+    exit 1
+}
+
+echo "[+] Both camera fixes verified."
 
 echo "=== [6/11] Preparing Kernel Configuration ==="
 if [ -f .config ]; then
@@ -400,3 +435,21 @@ echo "After booting into it, verify with:"
 echo "  aplay -l"
 echo "  ls /sys/bus/soundwire/devices/"
 echo "  dmesg | grep -iE 'soundwire|rt1320|sof'"
+
+
+
+
+# Need to add getting camera working.
+#
+# mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+
+# printf '%s\n' \
+#         'wireplumber.profiles = {' \
+#         '  main = {' \
+#         '    monitor.v4l2 = disabled' \
+#         '    monitor.libcamera = optional' \
+#         '  }' \
+#         '}' \
+#         > ~/.config/wireplumber/wireplumber.conf.d/99-prefer-libcamera.conf
+#
+# systemctl --user restart wireplumber
