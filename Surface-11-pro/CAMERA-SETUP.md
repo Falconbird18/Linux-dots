@@ -86,3 +86,13 @@ kernel retained embedded quotes in the resulting device names. The corrected
 line quotes the whole comma-separated value once. The installer recognizes only
 these specific malformed Surface labels and reloads their idle loopback module
 after writing the corrected configuration. An in-use module is never force-unloaded.
+
+## Pipeline parser and startup readiness correction
+
+The relay parses its input and idle descriptions before attaching an appsink.
+A trailing shorthand caps declaration had no following element, so parsing failed
+with `no element "video"`. Both descriptions now end in `identity`, leaving a
+real output pad for the relay. Install parses all three exact descriptions for
+both cameras first, without activating camera capture. The check waits up to ten
+seconds for each loopback to report capture mode and the expected format, and
+reports a missing frame file cleanly instead of producing a Python traceback.

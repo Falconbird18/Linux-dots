@@ -21,7 +21,7 @@ case "${1:-check}" in
     kernel=$(uname -r)
     [[ -f /usr/lib/modules/$kernel/build/Module.symvers ]] || fail "Matching build tree is missing for $kernel."
     # Keep distro PipeWire libraries matched. Never refresh databases without a full upgrade.
-    sudo pacman -S --needed base-devel git python dkms v4l2loopback-dkms v4l-utils \
+    sudo pacman -S --needed base-devel git python python-gobject dkms v4l2loopback-dkms v4l-utils \
       pipewire-libcamera libcamera libcamera-ipa gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire
     # Refuse to reuse numbers belonging to unrelated devices.
     for number in 42 43; do
@@ -59,6 +59,8 @@ PY
     cc -O2 -Wall "-DV4L2_RELAYD_VERSION=\"surface11-$RELAY_REF\"" "${ccflags[@]}" \
       "$CACHE/relay.c" -o "$CACHE/v4l2-relayd" "${ldflags[@]}"
     "$CACHE/v4l2-relayd" --version
+    bash "$SCRIPT_DIR/surface-camera-relay.sh" front --validate
+    bash "$SCRIPT_DIR/surface-camera-relay.sh" rear --validate
     # The custom kernel is installed outside the distro package hooks, so build
     # its loopback module explicitly. This does not change kernel source files.
     bash "$SCRIPT_DIR/ensure-camera-module.sh" "$kernel"
@@ -146,6 +148,20 @@ UNIT
     trap 'rm -rf "$capture_dir"' EXIT
     for number in 42 43; do
       echo "Testing $(cat "/sys/class/video4linux/video$number/name")..."
+      # An active service may still be initializing its output pipeline.
+      ready=0
+      for ((attempt=0; attempt<40; attempt++)); do
+        state=$(cat "/sys/devices/virtual/video4linux/video$number/state" 2>/dev/null || true)
+        format=$(cat "/sys/devices/virtual/video4linux/video$number/format" 2>/dev/null || true)
+        if [[ $state == capture && $format == YUYV:640x480@* ]]; then ready=1; break; fi
+        sleep 0.25
+      done
+      if (( ! ready )); then
+        echo "FAIL: video$number is not capture-ready; inspect relay logs below." >&2
+        failed=1
+        continue
+      fi
+      rm -f "$capture_dir/frames.raw"
       if timeout --kill-after=2s 15s v4l2-ctl -d "/dev/video$number" \
           --stream-mmap=3 --stream-count=60 --stream-to="$capture_dir/frames.raw"; then
         # A working loopback alone can emit its idle black placeholder. Reject
@@ -153,7 +169,10 @@ UNIT
         if python3 - "$capture_dir/frames.raw" <<'PYIMAGE'
 from pathlib import Path
 import sys
-raw = Path(sys.argv[1]).read_bytes()
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit('FAIL: The capture tool produced no frame file; inspect relay logs.')
+raw = path.read_bytes()
 frame_size = 640 * 480 * 2
 if len(raw) < frame_size:
     raise SystemExit('FAIL: No complete YUYV frame.')
