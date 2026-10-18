@@ -11,3 +11,5 @@ read -r -a libs <<< "$(pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 gstream
 cc -Wall -Wextra -Wno-unused-parameter "${cflags[@]}" "$ROOT/tests/test-loopback-writer.c" \
   -o "$build/test-loopback-writer" "${libs[@]}"
 "$build/test-loopback-writer"
+
+python3 "$ROOT/tests/check-routing.py"

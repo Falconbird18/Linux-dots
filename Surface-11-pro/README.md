@@ -7,7 +7,7 @@ bash install-surface11.sh
 ```
 
 Run from the downloaded/cloned `Surface-11-pro` folder as your desktop user.
-Keep that entire folder, including `patches/` and helper scripts. The master
+Keep that entire folder, including `patches/` and `wireplumber/` and helper scripts. The master
 installer calls those helpers; there is no need to run them individually.
 It requests sudo for privileged steps and never reboots automatically.
 
@@ -25,7 +25,7 @@ On the already patched kernel, it skips the build and goes directly to cameras.
 | Distribution | Arch-based, using pacman and systemd |
 | Kernel installation | systemd-boot, with the ESP mounted at `/efi` |
 | Driver fixes | Existing SoundWire RT1320 quirk, camera power/bridge/rotation fixes, IMX681 sensor integration |
-| Webcam compatibility | Processed native cameras relayed on demand to standard V4L2 devices |
+| Webcam compatibility | One public front/rear pair shared by V4L2 and PipeWire apps; native sources are private relay inputs |
 
 This is an experimental installer for this specific configuration, not a general
 Surface installer or a claim that every device feature works. Camera quality,
@@ -60,3 +60,9 @@ black placeholder. For details, diagnostic logs and undo behavior, see
 Re-running the installer repairs stale DKMS records and the malformed quoted
 camera labels created by an earlier revision. It reloads only this setup's known
 loopback devices; if they are busy, it stops and asks you to quit their users.
+
+The camera phase also installs a WirePlumber 0.5.18+ visibility policy and two
+PipeWire publisher services. GNOME Camera and portal browsers receive the same
+640×480 YUYV pixels as direct V4L2 apps. Rear mounting rotation is applied once in
+the relay. Reopen apps after installation and select **Surface Front Camera** or
+**Surface Rear Camera**; old browser device selections may need changing.

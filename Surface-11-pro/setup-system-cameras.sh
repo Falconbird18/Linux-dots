@@ -9,6 +9,8 @@ LIBEXEC=/usr/local/libexec/surface11-camera
 CONF_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 UNIT_DIR="$CONF_HOME/systemd/user"
+WP_CONF="$CONF_HOME/wireplumber/wireplumber.conf.d/90-surface11-camera.conf"
+WP_SCRIPT="$DATA_HOME/wireplumber/scripts/surface11-camera-policy.lua"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/surface11-camera"
 [[ $EUID -ne 0 ]] || { echo 'Run as your desktop user; sudo is requested only where needed.' >&2; exit 1; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -22,7 +24,15 @@ case "${1:-check}" in
     [[ -f /usr/lib/modules/$kernel/build/Module.symvers ]] || fail "Matching build tree is missing for $kernel."
     # Keep distro PipeWire libraries matched. Never refresh databases without a full upgrade.
     sudo pacman -S --needed base-devel git python python-gobject dkms v4l2loopback-dkms v4l-utils \
-      pipewire-libcamera libcamera libcamera-ipa gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire
+      pipewire wireplumber pipewire-libcamera libcamera libcamera-ipa gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire
+    wp_version=$(pacman -Q wireplumber | awk '{print $2}')
+    (( $(vercmp "$wp_version" 0.5.18) >= 0 )) || fail 'WirePlumber 0.5.18 or newer is required for private camera backends.'
+    for source in publish-surface-camera.sh check-camera-routing.py wireplumber/90-surface11-camera.conf wireplumber/surface11-camera-policy.lua; do
+      [[ -f $SCRIPT_DIR/$source ]] || fail "Missing $source; keep the installer folder together."
+    done
+    for file in "$WP_CONF" "$WP_SCRIPT"; do
+      if [[ -e $file ]] && ! grep -q 'Managed by surface11-camera' "$file"; then fail "Refusing to overwrite $file"; fi
+    done
     # Refuse to reuse numbers belonging to unrelated devices.
     for number in 42 43; do
       if [[ -e /sys/class/video4linux/video$number ]]; then
@@ -107,8 +117,9 @@ PY
     done
     if [[ -d $LIBEXEC && ! -f $LIBEXEC/managed-by-surface11-camera ]]; then fail "Unmanaged directory: $LIBEXEC"; fi
     for camera in front rear; do
-      unit="$UNIT_DIR/surface11-camera-$camera.service"
-      if [[ -e $unit ]] && ! grep -q 'Managed by surface11-camera' "$unit"; then fail "Refusing to overwrite $unit"; fi
+      for unit in "$UNIT_DIR/surface11-camera-$camera.service" "$UNIT_DIR/surface11-camera-$camera-publish.service"; do
+        if [[ -e $unit ]] && ! grep -q 'Managed by surface11-camera' "$unit"; then fail "Refusing to overwrite $unit"; fi
+      done
     done
     cat > "$CACHE/modprobe.conf" <<'CONFIG'
 # Managed by surface11-camera
@@ -124,6 +135,13 @@ RULES
     sudo touch "$LIBEXEC/managed-by-surface11-camera"
     sudo install -m 755 "$CACHE/v4l2-relayd" "$LIBEXEC/v4l2-relayd"
     sudo install -m 755 "$SCRIPT_DIR/surface-camera-relay.sh" "$LIBEXEC/surface-camera-relay.sh"
+    sudo install -m 755 "$SCRIPT_DIR/publish-surface-camera.sh" "$LIBEXEC/publish-surface-camera.sh"
+    mkdir -p "$(dirname "$WP_CONF")" "$(dirname "$WP_SCRIPT")"
+    wp_changed=0
+    if ! cmp -s "$SCRIPT_DIR/wireplumber/90-surface11-camera.conf" "$WP_CONF" ||
+       ! cmp -s "$SCRIPT_DIR/wireplumber/surface11-camera-policy.lua" "$WP_SCRIPT"; then wp_changed=1; fi
+    install -m 644 "$SCRIPT_DIR/wireplumber/90-surface11-camera.conf" "$WP_CONF"
+    install -m 644 "$SCRIPT_DIR/wireplumber/surface11-camera-policy.lua" "$WP_SCRIPT"
     sudo install -m 644 "$CACHE/modprobe.conf" /etc/modprobe.d/surface11-camera.conf
     sudo install -m 644 "$CACHE/modules.conf" /etc/modules-load.d/surface11-camera.conf
     sudo install -m 644 "$CACHE/udev.rules" /etc/udev/rules.d/70-surface11-camera.rules
@@ -156,7 +174,7 @@ RULES
 [Unit]
 Description=Surface $camera camera as a standard V4L2 webcam
 After=pipewire.service wireplumber.service
-Wants=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service surface11-camera-$camera-publish.service
 StartLimitIntervalSec=120
 StartLimitBurst=5
 [Service]
@@ -168,19 +186,43 @@ Environment=GST_DEBUG=2
 [Install]
 WantedBy=default.target
 UNIT
+      cat > "$UNIT_DIR/surface11-camera-$camera-publish.service" <<UNIT
+# Managed by surface11-camera
+[Unit]
+Description=Publish Surface $camera webcam to PipeWire apps
+After=surface11-camera-$camera.service wireplumber.service
+BindsTo=surface11-camera-$camera.service
+PartOf=surface11-camera-$camera.service
+[Service]
+ExecStart=$LIBEXEC/publish-surface-camera.sh $camera
+Restart=always
+RestartSec=3
+TimeoutStopSec=5
+[Install]
+WantedBy=default.target
+UNIT
     done
     # Retire only the previous app-specific experiment, not the normal launcher.
     rm -f "$DATA_HOME/applications/surface11-discord-camera.desktop" "$DATA_HOME/surface11-camera/discord-camera"
     if command -v update-desktop-database >/dev/null; then update-desktop-database "$DATA_HOME/applications"; fi
     systemctl --user daemon-reload
     systemctl --user enable surface11-camera-front.service surface11-camera-rear.service
-    systemctl --user reset-failed surface11-camera-front.service surface11-camera-rear.service
+    systemctl --user reset-failed surface11-camera-front.service surface11-camera-rear.service surface11-camera-front-publish.service surface11-camera-rear-publish.service
+    if (( wp_changed )); then
+      # Load the visibility policy; restarting only WirePlumber briefly refreshes
+      # device routing. Keep PipeWire itself and its audio streams running.
+      systemctl --user restart wireplumber.service
+    fi
     systemctl --user restart surface11-camera-front.service surface11-camera-rear.service
+    systemctl --user enable --now surface11-camera-front-publish.service surface11-camera-rear-publish.service
+    python3 "$SCRIPT_DIR/check-camera-routing.py"
     echo 'Installed. Two named V4L2 cameras start at login; physical capture starts on client demand.'
     echo 'Quit Discord fully, then use its NORMAL launcher. Run this script with check before opening it.'
     ;;
   check)
+    check_started=$(date --iso-8601=seconds)
     check_names || fail 'Standard Surface webcam devices are not installed. Run install first.'
+    python3 "$SCRIPT_DIR/check-camera-routing.py"
     systemctl --user --no-pager status surface11-camera-front.service surface11-camera-rear.service
     failed=0
     capture_dir=$(mktemp -d)
@@ -229,19 +271,37 @@ PYIMAGE
         echo "FAIL: video$number" >&2; failed=1
       fi
     done
+    for camera in front rear; do
+      echo "Testing shared PipeWire $camera webcam..."
+      if timeout --kill-after=2s 15s gst-launch-1.0 -q pipewiresrc \
+          target-object="surface11-camera-$camera" num-buffers=30 ! \
+          video/x-raw,format=YUY2,width=640,height=480 ! fakesink sync=false; then
+        echo "PASS: shared $camera webcam delivers frames to PipeWire apps."
+      else
+        echo "FAIL: shared PipeWire $camera webcam" >&2
+        failed=1
+      fi
+    done
     echo 'Recent relay logs (no images are saved):'
-    journalctl --user -u surface11-camera-front -u surface11-camera-rear -n 25 --no-pager
+    journalctl --user -u surface11-camera-front -u surface11-camera-rear --since "$check_started" -n 25 --no-pager
     exit "$failed"
     ;;
   undo)
+    systemctl --user disable --now surface11-camera-front-publish.service surface11-camera-rear-publish.service || true
     systemctl --user disable --now surface11-camera-front.service surface11-camera-rear.service || true
     rm -f "$UNIT_DIR/surface11-camera-front.service" "$UNIT_DIR/surface11-camera-rear.service"
+    rm -f "$UNIT_DIR/surface11-camera-front-publish.service" "$UNIT_DIR/surface11-camera-rear-publish.service"
+    wp_removed=0
+    for file in "$WP_CONF" "$WP_SCRIPT"; do
+      if [[ -f $file ]] && grep -q 'Managed by surface11-camera' "$file"; then rm "$file"; wp_removed=1; fi
+    done
+    if (( wp_removed )); then systemctl --user restart wireplumber.service; fi
     systemctl --user daemon-reload
     for f in /etc/modprobe.d/surface11-camera.conf /etc/modules-load.d/surface11-camera.conf /etc/udev/rules.d/70-surface11-camera.rules; do
       if [[ -f $f ]] && grep -q 'Managed by surface11-camera' "$f"; then sudo rm "$f"; fi
     done
     if [[ -f $LIBEXEC/managed-by-surface11-camera ]]; then
-      sudo rm -f "$LIBEXEC/v4l2-relayd" "$LIBEXEC/surface-camera-relay.sh" "$LIBEXEC/managed-by-surface11-camera"
+      sudo rm -f "$LIBEXEC/v4l2-relayd" "$LIBEXEC/surface-camera-relay.sh" "$LIBEXEC/publish-surface-camera.sh" "$LIBEXEC/managed-by-surface11-camera"
       sudo rmdir "$LIBEXEC"
     fi
     sudo udevadm control --reload-rules

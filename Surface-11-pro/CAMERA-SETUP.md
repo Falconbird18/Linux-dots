@@ -26,8 +26,8 @@ this setup. Existing sensor patches are still required.
 The relay keeps a black placeholder while idle. A v4l2loopback client-usage event
 starts the named native PipeWire source, and idle releases it. Fixed 640×480 YUYV
 at 30 fps is the initial compatibility target, not a sensor quality improvement.
-Apps can still list native/raw devices too; choose the two names above. Native
-PipeWire users and V4L2 apps share processed capture through PipeWire. OS camera
+Apps can still list native/raw devices too; choose the two names above. PipeWire apps
+and V4L2 apps consume the same processed loopback frames. OS camera
 permissions still apply. A virtual device is not a guarantee that every app works.
 
 The upstream Canonical relay is pinned to commit
@@ -152,7 +152,7 @@ This avoids both the unimplemented GStreamer rw output and the previous mmap
 queue/dequeue path. Client-usage events use the same open descriptor, preserving
 the on-demand native source and idle black placeholder.
 
-Keep `loopback-writer.h` alongside the scripts. After closing camera apps, rerun
+Keep `loopback-writer.h` and the `wireplumber/` directory alongside the scripts. After closing camera apps, rerun
 the main installer to rebuild and install the relay:
 
 ```bash
@@ -174,3 +174,55 @@ and padded rows, configuration failures, interrupted writes, short writes, write
 errors and invalid frame formats. Dependencies are the same GStreamer development
 libraries, compiler and Python GI bindings used by the installer. No service or
 system configuration is changed by this test.
+
+
+## One public camera path for desktop apps
+
+The latest host check delivered changing frames from both loopbacks. The old
+`implement write()` messages in that log belonged to the stopped relay processes;
+checks now show journal messages only from the current check onward.
+
+The live PipeWire graph exposed the two native libcamera sources, but cached the
+loopbacks as output-only devices before their writers became ready. Discord used
+the Surface loopbacks while Zen used the native “Built-in” sources. GNOME Camera
+uses PipeWire as well. That split let apps negotiate different sizes and handle
+rear-camera rotation differently. The screenshot's high-resolution corruption is
+not proof of a failure in the 640×480 loopback path.
+
+Two publisher services now wait for capture-ready loopbacks and explicitly create
+PipeWire capture nodes with the same Surface names. The V4L2 monitor copies are
+disabled to avoid duplicate nodes and startup races. Each publisher belongs to its
+relay service, so stopping or restarting the relay removes or recreates its public
+node. Creating a node does not continuously stream the physical sensor.
+
+WirePlumber remains the single native libcamera owner. The two native sources are
+assigned an internal role and hidden from ordinary PipeWire clients using the
+existing permission managers. The relay clients can still access them. Public
+camera permission and sandbox checks remain in place. This policy requires
+WirePlumber 0.5.18 or newer; it is routing policy, not a security boundary against
+programs deliberately accessing raw kernel devices or impersonating the relay.
+Unrelated USB cameras and audio policy are not matched by these rules.
+
+The front relay leaves orientation unchanged. The rear relay rotates pixels by
+180 degrees before writing YUYV, matching this model's sensor mounting and the
+observed upside-down loopback image. A preview may still be mirrored by an app.
+
+After installing, fully reopen apps and select **Surface Front Camera** or
+**Surface Rear Camera**. Portal apps should no longer offer the native Built-in
+pair. The installer verifies graph visibility as well as direct V4L2 and PipeWire
+frame delivery. It still cannot judge picture quality or what a remote caller sees.
+Loading the new policy restarts WirePlumber once and may briefly refresh audio
+routing; PipeWire itself is not restarted. Undo removes the publisher services and
+visibility policy and restores the native sources.
+
+Additional regression check (starts only isolated test servers, no real camera):
+
+```bash
+python3 tests/check-private-backends.py
+```
+
+This confirms that an ordinary app sees a public webcam while the native source
+is hidden, and that the relay can still receive synthetic frames from that source.
+The shared front loopback was also successfully read through a temporary live
+PipeWire publisher on the Surface. Updated installation, rear orientation and
+visual comparison in GNOME Camera, Discord and Zen still require host verification.

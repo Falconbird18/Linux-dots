@@ -31,7 +31,7 @@ sku=$(cat /sys/class/dmi/id/product_sku)
   fail "Unsupported hardware: $vendor / $sku. Model-specific patches will not be applied."
 command -v pacman >/dev/null || fail 'This installer currently supports Arch-based distributions only.'
 command -v systemctl >/dev/null || fail 'systemd is required.'
-for helper in build-linux-kernel.sh apply-imx681-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh loopback-writer.h; do
+for helper in build-linux-kernel.sh apply-imx681-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py loopback-writer.h; do
   [[ -f $SCRIPT_DIR/$helper ]] || fail "Missing $helper; keep the entire installer folder together."
 done
 for patch in imx681.patch Kconfig.patch Makefile.patch; do
