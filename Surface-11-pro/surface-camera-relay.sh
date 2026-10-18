@@ -9,10 +9,11 @@ esac
 # Fixed 640x480 YUYV is a widely supported baseline. No image-quality tuning.
 # The relay holds only a black placeholder while idle, opens the physical
 # PipeWire source on the loopback client-usage event, and releases it on idle.
-# Use write() output to avoid the loopback/GStreamer mmap dequeue errors.
+# The relay writes appsink frames directly: v4l2sink rw output is unimplemented.
+# This also avoids the loopback/GStreamer mmap dequeue path.
 # Backend source names cannot match the loopback nodes, avoiding feedback.
 input="pipewiresrc target-object=$node do-timestamp=true ! video/x-raw,width=640,height=480 ! videoconvert ! videorate ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1 ! identity"
-output="appsrc name=appsrc caps=video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1 ! queue max-size-buffers=3 leaky=downstream ! v4l2sink name=v4l2sink device=$device io-mode=rw sync=false"
+output="appsrc name=appsrc caps=video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1 ! queue max-size-buffers=3 leaky=downstream ! appsink name=loopback-writer emit-signals=true max-buffers=3 drop=true sync=false async=false"
 splash='videotestsrc is-live=true pattern=black ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1 ! identity'
 if [[ ${2:-} == --validate ]]; then
   # Parse the exact relay descriptions without opening/streaming any camera.
@@ -28,9 +29,11 @@ for label, description in zip(['input', 'output', 'idle'], sys.argv[1:]):
         raise SystemExit(f'{label}: no output pad for the relay appsink')
     if label == 'output':
         appsrc = pipeline.get_by_name('appsrc')
-        sink = pipeline.get_by_name('v4l2sink')
-        if int(sink.get_property('io-mode')) != 1:
-            raise SystemExit('The loopback writer must use read/write mode, avoiding its mmap dequeue path.')
+        sink = pipeline.get_by_name('loopback-writer')
+        if sink is None or sink.get_factory().get_name() != 'appsink':
+            raise SystemExit('Output must use the direct appsink writer, not v4l2sink.')
+        if not sink.get_property('emit-signals') or sink.get_property('async'):
+            raise SystemExit('Direct writer requires sample callbacks and synchronous startup.')
         required = Gst.Caps.from_string('video/x-raw,pixel-aspect-ratio=1/1')
         if not appsrc.get_property('caps').is_subset(required):
             raise SystemExit('Output caps must declare square pixels for V4L2 acceptance.')
@@ -45,4 +48,5 @@ for ((attempt=0; attempt<30; attempt++)); do
 done
 [[ -w $device ]] || { echo "No write access to $device" >&2; exit 1; }
 [[ $(cat "/sys/class/video4linux/${device##*/}/name") == "$name" ]] || exit 1
+export SURFACE11_LOOPBACK_DEVICE="$device"
 exec /usr/local/libexec/surface11-camera/v4l2-relayd -i "$input" -o "$output" -s "$splash"

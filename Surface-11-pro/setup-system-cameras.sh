@@ -69,11 +69,32 @@ for variable in ['input_pipeline', 'splash_pipeline']:
     if s.count(old) != 1:
         raise SystemExit(f'Unexpected relay cleanup for {variable}')
     s = s.replace(old, new)
+# Use our direct writer instead of GStreamer's unimplemented rw sink. Keep
+# the upstream client-usage watch on the same descriptor used to write frames.
+def replace_once(old, new):
+    global s
+    if s.count(old) != 1:
+        raise SystemExit(f'Unexpected relay source around {old!r}')
+    s = s.replace(old, new)
+replace_once('static gboolean opt_background', '#include "loopback-writer.h"\n\nstatic gboolean opt_background')
+replace_once('g_object_get (v4l2sink, "device-fd", &fd, NULL);', 'fd = loopback_fd;')
+replace_once('"v4l2sink");', '"loopback-writer");')
+replace_once('  gst_object_ref_sink (pipeline);\n\n  clock =',
+             '  gst_object_ref_sink (pipeline);\n'
+             '  if (!loopback_writer_attach (pipeline)) {\n'
+             '    gst_object_unref (pipeline);\n    return NULL;\n  }\n\n  clock =')
+replace_once('  gst_element_set_state (output_pipeline, GST_STATE_PLAYING);',
+             '  if (output_pipeline == NULL) return 1;\n'
+             '  gst_element_set_state (output_pipeline, GST_STATE_PLAYING);')
+replace_once('  g_main_loop_unref (loop);',
+             '  if (v4l2_event_poll_id != 0) g_source_remove (v4l2_event_poll_id);\n'
+             '  if (loopback_fd >= 0) close (loopback_fd);\n'
+             '  g_main_loop_unref (loop);')
 p.write_text(s)
 PY
     read -r -a ccflags <<< "$(pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gio-unix-2.0)"
     read -r -a ldflags <<< "$(pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gio-unix-2.0)"
-    cc -O2 -Wall "-DV4L2_RELAYD_VERSION=\"surface11-$RELAY_REF\"" "${ccflags[@]}" \
+    cc -O2 -Wall -I"$SCRIPT_DIR" "-DV4L2_RELAYD_VERSION=\"surface11-$RELAY_REF\"" "${ccflags[@]}" \
       "$CACHE/relay.c" -o "$CACHE/v4l2-relayd" "${ldflags[@]}"
     "$CACHE/v4l2-relayd" --version
     bash "$SCRIPT_DIR/surface-camera-relay.sh" front --validate

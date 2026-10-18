@@ -130,10 +130,9 @@ broker running as the same desktop user. Choose the named Surface cameras and
 avoid selecting IPU7 while testing. Elimination of this extra legacy entry remains
 unresolved; do not advertise universal app compatibility yet.
 
-The relay writer now explicitly uses `io-mode=rw`, avoiding the mmap buffer
-queue/dequeue path that repeatedly reported an unqueued buffer. This is a targeted
-workaround and still needs host capture/reopen testing after installation. The
-capture check now requires at least 30 complete frames, nonuniform image data,
+The previous `io-mode=rw` workaround was invalid: GStreamer accepts the option
+but its V4L2 output path only logs `implement write()` without writing frames.
+The direct writer described below replaces that workaround. The capture check requires at least 30 complete frames, nonuniform image data,
 and at least three distinct images among the final 30 frames. It cannot establish
 which physical camera the app selected or validate a video call.
 
@@ -141,3 +140,37 @@ which physical camera the app selected or validate a video call.
 colour problems still need sensor/ISP calibration. No global horizontal flip is
 introduced: apps/websites can mirror their preview. Check readable text in a
 saved photo or at the remote end of a call before changing captured pixels.
+
+
+## Direct loopback writer correction
+
+The output description now ends in an appsink. `loopback-writer.h`, compiled into
+the pinned relay, configures the loopback as 640×480 YUYV at 30 fps and writes each
+complete frame through the driver's file-I/O API. It packs padded image rows,
+retries interrupted writes, and reports failed or short writes as pipeline errors.
+This avoids both the unimplemented GStreamer rw output and the previous mmap
+queue/dequeue path. Client-usage events use the same open descriptor, preserving
+the on-demand native source and idle black placeholder.
+
+Keep `loopback-writer.h` alongside the scripts. After closing camera apps, rerun
+the main installer to rebuild and install the relay:
+
+```bash
+bash install-surface11.sh cameras
+```
+
+The installer still checks changing, nonuniform frames from both cameras. Camera
+capture, idle release, reopening and application compatibility require host testing;
+compilation and pipeline parsing alone cannot verify those behaviors.
+
+Run the hardware-independent regression checks with:
+
+```bash
+bash tests/check-relay.sh
+```
+
+These use real GStreamer frame buffers and simulated V4L2 calls to check packed
+and padded rows, configuration failures, interrupted writes, short writes, write
+errors and invalid frame formats. Dependencies are the same GStreamer development
+libraries, compiler and Python GI bindings used by the installer. No service or
+system configuration is changed by this test.
