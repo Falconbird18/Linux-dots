@@ -1,5 +1,8 @@
 # Surface Pro 11 standard webcam setup
 
+Use `bash install-surface11.sh` as the main entry point; it handles kernel and
+userspace phases. The commands below are lower-level camera-only helpers.
+
 The patched kernel and native libcamera/PipeWire stack already stream both sensors.
 The remaining compatibility layer exposes processed video as ordinary V4L2 cameras:
 
@@ -75,3 +78,11 @@ specific module if it is missing. Kernel rebuilds also force compilation against
 the new build tree even when the release string is unchanged. Rerun `install`
 after pulling this correction; no additional sensor patch or reboot is needed
 unless module loading itself reports an error.
+
+## Malformed labels from an earlier installer revision
+
+The old module-options line quoted each item in `card_label` separately. The
+kernel retained embedded quotes in the resulting device names. The corrected
+line quotes the whole comma-separated value once. The installer recognizes only
+these specific malformed Surface labels and reloads their idle loopback module
+after writing the corrected configuration. An in-use module is never force-unloaded.

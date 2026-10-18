@@ -22,27 +22,19 @@ PATCH_DIR="$SCRIPT_DIR/patches"
 # Your ESP is mounted at /efi
 ESP="/efi"
 
-echo "=== [0/11] Cleaning up previous kernel installation ==="
-# Clean both possible places
-sudo rm -f /boot/vmlinuz-linux-surface11 \
-           /boot/initramfs-linux-surface11.img \
-           /boot/System.map-linux-surface11 \
-           /boot/config-linux-surface11 2>/dev/null || true
-
-sudo rm -f "$ESP/vmlinuz-linux-surface11" \
-           "$ESP/initramfs-linux-surface11.img" \
-           "$ESP/System.map-linux-surface11" \
-           "$ESP/config-linux-surface11" 2>/dev/null || true
-
-sudo rm -f "$ESP/loader/entries/surface11-custom.conf" 2>/dev/null || true
-
-if [ -d "/lib/modules/$KERNEL_RELEASE" ]; then
-    sudo rm -rf "/lib/modules/$KERNEL_RELEASE"
-    echo "[+] Removed old module directory: /lib/modules/$KERNEL_RELEASE"
-fi
+# Preflight before downloads or any boot-file changes.
+[[ $(uname -m) == x86_64 ]] || { echo "[-] This build is for the Intel model only."; exit 1; }
+mountpoint -q "$ESP" || { echo "[-] $ESP must be the mounted systemd-boot ESP."; exit 1; }
+[[ -d $ESP/loader ]] || { echo "[-] systemd-boot loader directory missing."; exit 1; }
+[[ $(uname -r) != "$KERNEL_RELEASE" ]] || {
+    echo "[-] Boot another kernel before rebuilding this same kernel release."
+    echo "    This keeps the running kernel's modules intact."
+    exit 1
+}
+echo "=== [0/11] Preserving existing kernel and boot files until installation ==="
 
 echo "=== [1/11] Installing build dependencies ==="
-sudo pacman -S --needed base-devel git bc pahole cpio libelf ncurses wget tar xz zstd python
+sudo pacman -S --needed base-devel git bc pahole cpio libelf ncurses wget curl tar xz zstd python
 
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
@@ -290,29 +282,29 @@ if (( PRESENT == ${#PATCH_MARKERS[@]} )); then
 elif (( PRESENT == 0 )); then
     echo "[+] OV13858 power patch is absent; downloading it..."
 
-    PATCH_DIR="$(mktemp -d)"
-    trap 'rm -rf "$PATCH_DIR"' EXIT
+    OV_PATCH_DIR="$(mktemp -d)"
+    trap 'rm -rf "$OV_PATCH_DIR"' EXIT
 
     curl --fail --location --retry 3 \
         "https://lore-kernel.gnuweeb.org/linux-media/20260831130312.26296-1-lsa.uz@pm.me/raw" \
-        -o "$PATCH_DIR/ov13858-power.eml"
+        -o "$OV_PATCH_DIR/ov13858-power.eml"
 
-    git mailinfo "$PATCH_DIR/ov13858-power.msg" \
-        "$PATCH_DIR/ov13858-power.patch" \
-        < "$PATCH_DIR/ov13858-power.eml" >/dev/null
+    git mailinfo "$OV_PATCH_DIR/ov13858-power.msg" \
+        "$OV_PATCH_DIR/ov13858-power.patch" \
+        < "$OV_PATCH_DIR/ov13858-power.eml" >/dev/null
 
-    if [[ ! -s "$PATCH_DIR/ov13858-power.patch" ]]; then
+    if [[ ! -s "$OV_PATCH_DIR/ov13858-power.patch" ]]; then
         echo "[-] OV13858 patch extraction failed."
         exit 1
     fi
 
     echo "[+] Checking whether the patch applies..."
-    git apply --check "$PATCH_DIR/ov13858-power.patch"
+    git apply --check "$OV_PATCH_DIR/ov13858-power.patch"
 
     echo "[+] Applying OV13858 power patch..."
-    git apply "$PATCH_DIR/ov13858-power.patch"
+    git apply "$OV_PATCH_DIR/ov13858-power.patch"
 
-    rm -rf "$PATCH_DIR"
+    rm -rf "$OV_PATCH_DIR"
     trap - EXIT
 
     # Verify that all expected changes now exist.
@@ -539,6 +531,16 @@ if [ ! -d "$ESP" ]; then
     exit 1
 fi
 
+# Keep the previous custom boot assets recoverable; leave other kernels alone.
+BACKUP_DIR="$ESP/surface11-backups/$(date +%Y%m%d-%H%M%S)"
+if [[ -f $ESP/vmlinuz-linux-surface11 ]]; then
+    sudo mkdir -p "$BACKUP_DIR"
+    for file in vmlinuz-linux-surface11 initramfs-linux-surface11.img System.map-linux-surface11 config-linux-surface11 loader/entries/surface11-custom.conf; do
+        [[ ! -f $ESP/$file ]] || sudo cp -a "$ESP/$file" "$BACKUP_DIR/"
+    done
+    echo "[+] Previous custom boot assets saved in $BACKUP_DIR"
+fi
+
 sudo cp -v arch/x86/boot/bzImage "$ESP/vmlinuz-linux-surface11"
 sudo cp -v System.map           "$ESP/System.map-linux-surface11"
 sudo cp -v .config              "$ESP/config-linux-surface11"
@@ -558,11 +560,16 @@ fi
 echo "=== [11/11] Creating systemd-boot entry ==="
 sudo mkdir -p "$ESP/loader/entries"
 
-ROOT_PARTUUID=$(findmnt -n -o PARTUUID /)
-if [ -z "$ROOT_PARTUUID" ]; then
-    echo "[-] Could not determine root PARTUUID"
-    exit 1
-fi
+BOOT_OPTIONS=$(python3 - <<'PYOPTS'
+from pathlib import Path
+import shlex
+args = [x for x in shlex.split(Path('/proc/cmdline').read_text())
+        if not x.startswith(('BOOT_IMAGE=', 'initrd='))]
+if not any(x.startswith('root=') for x in args):
+    raise SystemExit('No root= boot option found; refusing to invent a boot configuration.')
+print(' '.join('"' + x.replace('"', '\\"') + '"' if any(c.isspace() for c in x) else x for x in args))
+PYOPTS
+)
 
 ENTRY_FILE="$ESP/loader/entries/surface11-custom.conf"
 
@@ -570,7 +577,7 @@ sudo tee "$ENTRY_FILE" > /dev/null <<EOF
 title   Linux Surface11 Custom ($KERNEL_VERSION)
 linux   /vmlinuz-linux-surface11
 initrd  /initramfs-linux-surface11.img
-options root=PARTUUID=$ROOT_PARTUUID rw
+options $BOOT_OPTIONS
 EOF
 
 echo

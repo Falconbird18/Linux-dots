@@ -27,6 +27,7 @@ case "${1:-check}" in
     for number in 42 43; do
       if [[ -e /sys/class/video4linux/video$number ]]; then
         name=$(cat "/sys/class/video4linux/video$number/name")
+        name=${name//\"/}
         [[ $name == 'Surface Front Camera' || $name == 'Surface Rear Camera' ]] || fail "video$number is already used by $name."
       fi
     done
@@ -71,7 +72,7 @@ PY
     done
     cat > "$CACHE/modprobe.conf" <<'CONFIG'
 # Managed by surface11-camera
-options v4l2loopback devices=2 video_nr=42,43 card_label="Surface Front Camera","Surface Rear Camera" exclusive_caps=1,1 max_buffers=4
+options v4l2loopback devices=2 video_nr=42,43 card_label="Surface Front Camera,Surface Rear Camera" exclusive_caps=1,1 max_buffers=4
 CONFIG
     printf '# Managed by surface11-camera\nv4l2loopback\n' > "$CACHE/modules.conf"
     cat > "$CACHE/udev.rules" <<'RULES'
@@ -79,10 +80,6 @@ CONFIG
 SUBSYSTEM=="video4linux", KERNEL=="video42", ATTR{name}=="Surface Front Camera", GROUP="video", MODE="0660", TAG+="uaccess", SYMLINK+="surface-front-camera"
 SUBSYSTEM=="video4linux", KERNEL=="video43", ATTR{name}=="Surface Rear Camera", GROUP="video", MODE="0660", TAG+="uaccess", SYMLINK+="surface-rear-camera"
 RULES
-    # Do not unload an existing loopback module that OBS or another app may use.
-    if [[ -d /sys/module/v4l2loopback ]] && ! check_names; then
-      fail 'v4l2loopback is already loaded without our cameras. Close apps and unload it, or reboot after configuring it; no active module was unloaded.'
-    fi
     sudo install -d "$LIBEXEC"
     sudo touch "$LIBEXEC/managed-by-surface11-camera"
     sudo install -m 755 "$CACHE/v4l2-relayd" "$LIBEXEC/v4l2-relayd"
@@ -91,6 +88,23 @@ RULES
     sudo install -m 644 "$CACHE/modules.conf" /etc/modules-load.d/surface11-camera.conf
     sudo install -m 644 "$CACHE/udev.rules" /etc/udev/rules.d/70-surface11-camera.rules
     sudo udevadm control --reload-rules
+    if [[ -d /sys/module/v4l2loopback ]] && ! check_names; then
+      # Recover only our known malformed labels, never unrelated webcams.
+      for number in 42 43; do
+        name=$(cat "/sys/devices/virtual/video4linux/video$number/name" 2>/dev/null) || fail 'Existing loopback devices are unrelated; close their users and unload v4l2loopback before retrying.'
+        name=${name//\"/}
+        case "$number:$name" in
+          '42:Surface Front Camera'|'43:Surface Rear Camera') ;;
+          *) fail 'Existing loopback devices are unrelated; refusing to unload them.' ;;
+        esac
+      done
+      for path in /sys/devices/virtual/video4linux/video*; do
+        [[ -e $path ]] || continue
+        [[ ${path##*/} == video42 || ${path##*/} == video43 ]] || fail 'Other virtual cameras exist; refusing automatic module reload.'
+      done
+      systemctl --user stop surface11-camera-front.service surface11-camera-rear.service 2>/dev/null || true
+      sudo modprobe -r v4l2loopback || fail 'Camera devices are busy. Fully quit camera apps, then rerun install.'
+    fi
     sudo modprobe v4l2loopback
     sudo udevadm trigger --subsystem-match=video4linux --sysname-match=video42 --action=change
     sudo udevadm trigger --subsystem-match=video4linux --sysname-match=video43 --action=change
