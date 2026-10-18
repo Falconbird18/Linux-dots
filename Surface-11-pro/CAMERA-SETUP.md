@@ -112,3 +112,32 @@ Validation reproduced the old rejection and accepted the new caps against the
 formats from the real host log. The adjusted relay compiles and a forced early
 output failure exits without null-object cleanup warnings. Actual capture still
 needs the updated installed services and the master installer's frame checks.
+
+## App test findings and remaining work
+
+The front camera works in Discord, Zen and GNOME Camera; rear capture failed in
+those app tests. After Discord and all camera apps were fully closed, a separate
+30-frame native PipeWire rear-camera test passed again. The earlier logs showed
+raw rear capture failing with `Device or resource busy`. This is consistent with
+an app holding the raw IPU7 capture node, rather than a missing sensor driver.
+
+`Built-in Front Camera` / `Built-in Back Camera` are native libcamera nodes;
+`Surface Front Camera` / `Surface Rear Camera` are the standard loopback devices.
+The former appearing in a website report does not verify the loopback route.
+Legacy apps may also list an IPU7 raw capture device. This revision does not hide
+that raw node: changing its permissions would also affect the native camera
+broker running as the same desktop user. Choose the named Surface cameras and
+avoid selecting IPU7 while testing. Elimination of this extra legacy entry remains
+unresolved; do not advertise universal app compatibility yet.
+
+The relay writer now explicitly uses `io-mode=rw`, avoiding the mmap buffer
+queue/dequeue path that repeatedly reported an unqueued buffer. This is a targeted
+workaround and still needs host capture/reopen testing after installation. The
+capture check now requires at least 30 complete frames, nonuniform image data,
+and at least three distinct images among the final 30 frames. It cannot establish
+which physical camera the app selected or validate a video call.
+
+640x480 is the current compatibility baseline, not a sensor maximum. Grain and
+colour problems still need sensor/ISP calibration. No global horizontal flip is
+introduced: apps/websites can mirror their preview. Check readable text in a
+saved photo or at the remote end of a call before changing captured pixels.

@@ -187,17 +187,21 @@ UNIT
         if python3 - "$capture_dir/frames.raw" <<'PYIMAGE'
 from pathlib import Path
 import sys
+import hashlib
 path = Path(sys.argv[1])
 if not path.is_file():
     raise SystemExit('FAIL: The capture tool produced no frame file; inspect relay logs.')
 raw = path.read_bytes()
 frame_size = 640 * 480 * 2
-if len(raw) < frame_size:
-    raise SystemExit('FAIL: No complete YUYV frame.')
+if len(raw) < frame_size * 30 or len(raw) % frame_size:
+    raise SystemExit('FAIL: Expected at least 30 complete YUYV frames.')
+frames = [raw[i:i + frame_size] for i in range(0, len(raw), frame_size)]
+if len({hashlib.sha256(frame).digest() for frame in frames[-30:]}) < 3:
+    raise SystemExit('INCONCLUSIVE: frozen/repeated frames. Move something in view and retry.')
 y = raw[-frame_size::2]
 if max(y) - min(y) <= 2:
     raise SystemExit('INCONCLUSIVE: uniform/black output. Aim at a lit scene and retry; the sensor may not be streaming.')
-print('PASS: complete frames with nonuniform image data; check the preview for the correct camera.')
+print('PASS: changing, nonuniform frames received. Confirm the correct camera in the preview; app compatibility is not yet verified.')
 PYIMAGE
         then :; else failed=1; fi
       else
