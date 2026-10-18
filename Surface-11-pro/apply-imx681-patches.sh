@@ -1,152 +1,203 @@
 #!/usr/bin/env bash
-# Apply locally downloaded Sony IMX681 patches to a Linux kernel source tree.
-# Run from the kernel source root, e.g.:
-#   cd ~/surface-kernel-build/linux-7.2.9
-#   bash ../apply-imx681-patches.sh
-#
-# Expected patch files:
-#   ~/surface-kernel-build/patches/imx681.patch
-#   ~/surface-kernel-build/patches/Kconfig.patch
-#   ~/surface-kernel-build/patches/Makefile.patch
-#   ~/surface-kernel-build/patches/ipu-bridge.patch
-#
-# The supplied files may be quoted-printable encoded. This script normalizes
-# them first, then checks each patch before applying it.
-
 set -euo pipefail
 
-PATCH_DIR="${PATCH_DIR:-$HOME/surface-kernel-build/patches}"
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+# Apply Sony IMX681 front-camera patches for the Surface Pro 11.
+# Adapts the driver to the V4L2 API in the target kernel source.
 
-for f in imx681.patch Kconfig.patch Makefile.patch ipu-bridge.patch; do
-    if [[ ! -s "$PATCH_DIR/$f" ]]; then
-        echo "[-] Missing patch file: $PATCH_DIR/$f"
-        exit 1
-    fi
-done
+KERNEL_DIR="${1:-$(pwd)}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PATCH_DIR="${PATCH_DIR:-$SCRIPT_DIR/patches}"
 
-# Decode quoted-printable mail-body artifacts without changing ordinary diffs.
-python3 - "$PATCH_DIR" "$TMP_DIR" <<'PYEOF'
-from pathlib import Path
-import quopri
-import sys
+cd "$KERNEL_DIR"
 
-src = Path(sys.argv[1])
-dst = Path(sys.argv[2])
+echo "[+] Kernel source: $KERNEL_DIR"
+echo "[+] Patch directory: $PATCH_DIR"
 
-for name in ("imx681.patch", "Kconfig.patch", "Makefile.patch", "ipu-bridge.patch"):
-    raw = (src / name).read_bytes()
-    decoded = quopri.decodestring(raw)
-    if b"diff --git " not in decoded:
-        raise SystemExit(f"[-] {name}: no valid unified git diff found after decoding")
-    (dst / name).write_bytes(decoded)
-    print(f"[+] Normalized {name}")
-PYEOF
-
-apply_or_verify() {
-    local patch="$1"
-    local target="$2"
-    local marker="$3"
-
-    if grep -Fq "$marker" "$target"; then
-        echo "[+] $target already contains '$marker'; skipping patch."
-        return 0
-    fi
-
-    echo "[+] Checking $patch..."
-    if ! git apply --check "$TMP_DIR/$patch"; then
-        echo "[-] Patch does not apply cleanly: $patch"
-        echo "    No automatic fuzzing or forced application will be attempted."
-        exit 1
-    fi
-
-    git apply "$TMP_DIR/$patch"
-    grep -Fq "$marker" "$target" || {
-        echo "[-] Patch applied but verification failed: $target lacks '$marker'"
-        exit 1
-    }
-    echo "[+] Applied and verified $patch"
-}
-
-# The driver source itself.
-if [[ -s drivers/media/i2c/imx681.c ]] &&
-   grep -Fq 'SONY0681' drivers/media/i2c/imx681.c; then
-    echo "[+] IMX681 driver already exists; skipping driver patch."
-else
-    if [[ -e drivers/media/i2c/imx681.c ]]; then
-        echo "[-] imx681.c exists but SONY0681 support was not found; inspect it manually."
-        exit 1
-    fi
-    echo "[+] Checking IMX681 driver patch..."
-    git apply --check "$TMP_DIR/imx681.patch"
-    git apply "$TMP_DIR/imx681.patch"
-    grep -Fq 'SONY0681' drivers/media/i2c/imx681.c || {
-        echo "[-] Driver patch applied but ACPI ID SONY0681 was not found."
-        exit 1
-    }
-    echo "[+] IMX681 driver applied and verified."
+# 1. Check the kernel source tree.
+if [[ ! -f drivers/media/pci/intel/ipu-bridge.c ||
+      ! -f drivers/media/i2c/Kconfig ||
+      ! -f drivers/media/i2c/Makefile ]]; then
+    echo "[-] This does not look like the expected kernel source directory."
+    exit 1
 fi
 
-apply_or_verify Kconfig.patch drivers/media/i2c/Kconfig 'config VIDEO_IMX681'
-apply_or_verify Makefile.patch drivers/media/i2c/Makefile 'CONFIG_VIDEO_IMX681) += imx681.o'
-
-# Prefer the supplied bridge patch if it applies to this kernel revision.
-# If it does not, insert the same sensor entry near the existing sensor table,
-# but only if there is a unique, known anchor.
-BRIDGE="drivers/media/pci/intel/ipu-bridge.c"
-BRIDGE_ENTRY='IPU_SENSOR_CONFIG("SONY0681", 1, 969600000)'
-
-if grep -Fq "$BRIDGE_ENTRY" "$BRIDGE"; then
-    echo "[+] SONY0681 IPU bridge entry already present."
-elif git apply --check "$TMP_DIR/ipu-bridge.patch" >/dev/null 2>&1; then
-    git apply "$TMP_DIR/ipu-bridge.patch"
-    grep -Fq "$BRIDGE_ENTRY" "$BRIDGE" || {
-        echo "[-] Bridge patch applied but SONY0681 entry was not found."
-        exit 1
-    }
-    echo "[+] Applied supplied IPU bridge patch."
+# 2. Apply the IMX681 driver patch if the driver is missing.
+if [[ -f drivers/media/i2c/imx681.c ]]; then
+    echo "[+] IMX681 driver already exists; skipping driver patch."
+elif [[ -f "$PATCH_DIR/imx681.patch" ]]; then
+    echo "[+] Applying IMX681 driver patch..."
+    patch -p1 --forward < "$PATCH_DIR/imx681.patch"
 else
-    echo "[!] Supplied IPU bridge patch does not match this source revision."
-    echo "[+] Attempting a guarded insertion beside the existing sensor entries..."
-    python3 - "$BRIDGE" <<'PYEOF'
+    echo "[-] Missing driver and patch: $PATCH_DIR/imx681.patch"
+    exit 1
+fi
+
+# 3. Adapt the driver callback signatures to the kernel's V4L2 API.
+echo "[+] Checking IMX681 V4L2 API compatibility..."
+
+python - <<'PY'
+from pathlib import Path
+import re
+import shutil
+import sys
+
+path = Path("drivers/media/i2c/imx681.c")
+text = path.read_text()
+updated = text
+
+# Match either the old four-argument signature or the corrected
+# three-argument signature. Whitespace and line wrapping are flexible.
+functions = [
+    (
+        "imx681_set_pad_format",
+        re.compile(
+            r"(static\s+int\s+imx681_set_pad_format\s*"
+            r"\(\s*struct\s+v4l2_subdev\s*\*\s*sd\s*,\s*)"
+            r"(?:const\s+struct\s+v4l2_subdev_client_info\s*"
+            r"\*\s*ci\s*,\s*)?"
+            r"(struct\s+v4l2_subdev_state\s*\*\s*state\s*,\s*)"
+            r"(struct\s+v4l2_subdev_format\s*\*\s*fmt\s*\))"
+        ),
+    ),
+    (
+        "imx681_get_selection",
+        re.compile(
+            r"(static\s+int\s+imx681_get_selection\s*"
+            r"\(\s*struct\s+v4l2_subdev\s*\*\s*sd\s*,\s*)"
+            r"(?:const\s+struct\s+v4l2_subdev_client_info\s*"
+            r"\*\s*ci\s*,\s*)?"
+            r"(struct\s+v4l2_subdev_state\s*\*\s*state\s*,\s*)"
+            r"(struct\s+v4l2_subdev_selection\s*\*\s*sel\s*\))"
+        ),
+    ),
+]
+
+for name, pattern in functions:
+    matches = list(pattern.finditer(updated))
+
+    if len(matches) != 1:
+        print(
+            f"[-] Expected exactly one recognizable {name} signature; "
+            f"found {len(matches)}."
+        )
+        print("[-] No changes have been written by this step.")
+        sys.exit(1)
+
+    match = matches[0]
+    signature = match.group(0)
+
+    if "v4l2_subdev_client_info" in signature:
+        replacement = match.group(1) + match.group(2) + match.group(3)
+        updated = (
+            updated[:match.start()]
+            + replacement
+            + updated[match.end():]
+        )
+        print(f"[+] Removed obsolete client-info argument from {name}.")
+    else:
+        print(f"[+] {name} already has the compatible signature.")
+
+if updated != text:
+    backup = path.with_suffix(".c.bak")
+
+    if not backup.exists():
+        shutil.copy2(path, backup)
+        print(f"[+] Backup created: {backup}")
+    else:
+        print(f"[+] Existing backup preserved: {backup}")
+
+    path.write_text(updated)
+    print("[+] V4L2 callback signatures updated.")
+else:
+    print("[+] No driver changes needed.")
+PY
+
+# 4. Ensure the IMX681 Kconfig entry exists.
+if grep -q '^config VIDEO_IMX681$' drivers/media/i2c/Kconfig; then
+    echo "[+] Kconfig already contains VIDEO_IMX681."
+elif [[ -f "$PATCH_DIR/Kconfig.patch" ]]; then
+    echo "[+] Applying Kconfig patch..."
+    patch -p1 --forward < "$PATCH_DIR/Kconfig.patch"
+else
+    echo "[-] Missing Kconfig entry and patch: $PATCH_DIR/Kconfig.patch"
+    exit 1
+fi
+
+# 5. Ensure the IMX681 Makefile entry exists.
+if grep -q 'CONFIG_VIDEO_IMX681.*imx681\.o' drivers/media/i2c/Makefile; then
+    echo "[+] Makefile already contains the IMX681 entry."
+elif [[ -f "$PATCH_DIR/Makefile.patch" ]]; then
+    echo "[+] Applying Makefile patch..."
+    patch -p1 --forward < "$PATCH_DIR/Makefile.patch"
+else
+    echo "[-] Missing Makefile entry and patch: $PATCH_DIR/Makefile.patch"
+    exit 1
+fi
+
+# 6. Register IMX681 with the Intel IPU bridge.
+BRIDGE_FILE="drivers/media/pci/intel/ipu-bridge.c"
+
+if grep -q 'IPU_SENSOR_CONFIG("SONY0681"' "$BRIDGE_FILE"; then
+    echo "[+] IMX681 IPU bridge entry already exists."
+else
+    echo "[+] Adding IMX681 to the IPU bridge sensor table..."
+
+    python - "$BRIDGE_FILE" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
-entry = 'IPU_SENSOR_CONFIG("SONY0681", 1, 969600000)'
-anchors = [
-    '\t/* Omnivision OV13B10 */',
-    '\t/* Omnivision OV13858 */',
-    '\tIPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)',
-]
 
-found = [a for a in anchors if a in text]
-if len(found) != 1:
-    raise SystemExit(
-        "[-] Could not identify exactly one known camera-table anchor. "
-        "No bridge changes saved."
+anchor = '\tIPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000),'
+entry = '\tIPU_SENSOR_CONFIG("SONY0681", 1, 969600000),'
+
+count = text.count(anchor)
+
+if count != 1:
+    sys.exit(
+        f"[-] Expected exactly one OV13858 sensor-table entry; "
+        f"found {count}. No bridge changes were made."
     )
 
-anchor = found[0]
-if anchor.startswith('\tIPU_SENSOR_CONFIG'):
-    insertion = '\t/* Sony IMX681 */\n\t' + entry + ',\n'
-else:
-    insertion = '\t/* Sony IMX681 */\n\t' + entry + ',\n'
-
-text = text.replace(anchor, insertion + anchor, 1)
+text = text.replace(anchor, anchor + "\n" + entry, 1)
 path.write_text(text)
-print("[+] Inserted SONY0681 bridge entry.")
-PYEOF
+
+print("[+] Inserted IMX681 entry after OV13858.")
+PY
 fi
 
-# Final verification.
-grep -Fq 'SONY0681' drivers/media/i2c/imx681.c
-grep -Fq 'config VIDEO_IMX681' drivers/media/i2c/Kconfig
-grep -Fq 'CONFIG_VIDEO_IMX681) += imx681.o' drivers/media/i2c/Makefile
-grep -Fq "$BRIDGE_ENTRY" "$BRIDGE"
-
+# 7. Verify all required source changes.
 echo
-echo "[+] IMX681 source, Kconfig, Makefile, and IPU bridge changes verified."
-echo "[!] This confirms source integration only; build and runtime camera support are not yet proven."
+echo "[+] Verifying IMX681 integration..."
+
+DRIVER="drivers/media/i2c/imx681.c"
+
+[[ -f "$DRIVER" ]] || {
+    echo "[-] IMX681 driver source is missing."
+    exit 1
+}
+
+grep -q '^config VIDEO_IMX681$' drivers/media/i2c/Kconfig || {
+    echo "[-] VIDEO_IMX681 is missing from Kconfig."
+    exit 1
+}
+
+grep -q 'CONFIG_VIDEO_IMX681.*imx681\.o' drivers/media/i2c/Makefile || {
+    echo "[-] IMX681 is missing from the I2C Makefile."
+    exit 1
+}
+
+grep -q 'IPU_SENSOR_CONFIG("SONY0681"' "$BRIDGE_FILE" || {
+    echo "[-] SONY0681 is missing from the IPU bridge sensor table."
+    exit 1
+}
+
+if grep -q 'v4l2_subdev_client_info' "$DRIVER"; then
+    echo "[-] The driver still references v4l2_subdev_client_info."
+    echo "[-] Inspect the source before building."
+    exit 1
+fi
+
+echo "[+] All IMX681 source integration checks passed."
+echo "[+] No kernel build was started by this script."

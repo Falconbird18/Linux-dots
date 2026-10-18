@@ -1,11 +1,11 @@
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
-index 4d994647916..c759a2d2398 100644
 --- a/drivers/media/i2c/Kconfig
 +++ b/drivers/media/i2c/Kconfig
-@@ -321,6 +321,16 @@ config VIDEO_IMX678
+@@ -286,6 +286,16 @@
+ 
  	  To compile this driver as a module, choose M here: the
- 	  module will be called imx678.
-=20
+ 	  module will be called imx415.
++
 +config VIDEO_IMX681
 +	tristate "Sony IMX681 sensor support"
 +	select V4L2_CCI_I2C
@@ -15,7 +15,6 @@ index 4d994647916..c759a2d2398 100644
 +
 +	  To compile this driver as a module, choose M here: the
 +	  module will be called imx681.
-+
+ 
  config VIDEO_MAX9271_LIB
  	tristate
-=20

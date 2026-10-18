@@ -10,9 +10,14 @@ fi
 CAMERA_MODULE_HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/ensure-camera-module.sh"
 
 KERNEL_VERSION="7.2.9"
-WORK_DIR="$HOME/surface-kernel-build"
 CUSTOM_SUFFIX="-surface11-custom"
 KERNEL_RELEASE="${KERNEL_VERSION}${CUSTOM_SUFFIX}"
+
+# --- Paths ---
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WORK_DIR="$HOME/surface-kernel-build"
+KERNEL_DIR="$WORK_DIR/linux-7.2.9"
+PATCH_DIR="$SCRIPT_DIR/patches"
 
 # Your ESP is mounted at /efi
 ESP="/efi"
@@ -464,11 +469,13 @@ echo "[+] IPU bridge entry and rotation quirk verified."
 echo "[!] The rotation fix sets metadata to 180 degrees; not every application"
 echo "    automatically rotates captured pixels."
 
-
 # --- 5e. Apply local Sony IMX681 patches ---
 echo "=== [5e] Applying Sony IMX681 front-camera patches ==="
 
-bash "$WORK_DIR/apply-imx681-patches.sh"
+(
+    cd "$KERNEL_DIR"
+    PATCH_DIR="$PATCH_DIR" bash "$SCRIPT_DIR/apply-imx681-patches.sh"
+)
 
 echo "=== [6/11] Preparing Kernel Configuration ==="
 if [ -f .config ]; then
@@ -525,7 +532,6 @@ if [[ -f /etc/modules-load.d/surface11-camera.conf ]]; then
     command -v dkms >/dev/null || { echo "[-] Camera bridge requires DKMS."; exit 1; }
     bash "$CAMERA_MODULE_HELPER" "$ACTUAL_KERNEL_RELEASE" rebuild
 fi
-
 
 # Make sure ESP is accessible
 if [ ! -d "$ESP" ]; then
