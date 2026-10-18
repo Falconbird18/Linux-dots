@@ -10,9 +10,9 @@ esac
 # The relay holds only a black placeholder while idle, opens the physical
 # PipeWire source on the loopback client-usage event, and releases it on idle.
 # Backend source names cannot match the loopback nodes, avoiding feedback.
-input="pipewiresrc target-object=$node do-timestamp=true ! video/x-raw,width=640,height=480 ! videoconvert ! videorate ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1 ! identity"
-output="appsrc name=appsrc caps=video/x-raw,format=YUY2,width=640,height=480,framerate=30/1 ! queue max-size-buffers=3 leaky=downstream ! v4l2sink name=v4l2sink device=$device sync=false"
-splash='videotestsrc is-live=true pattern=black ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1 ! identity'
+input="pipewiresrc target-object=$node do-timestamp=true ! video/x-raw,width=640,height=480 ! videoconvert ! videorate ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1 ! identity"
+output="appsrc name=appsrc caps=video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1 ! queue max-size-buffers=3 leaky=downstream ! v4l2sink name=v4l2sink device=$device sync=false"
+splash='videotestsrc is-live=true pattern=black ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1 ! identity'
 if [[ ${2:-} == --validate ]]; then
   # Parse the exact relay descriptions without opening/streaming any camera.
   python3 - "$input" "$output" "$splash" <<'PYGST'
@@ -25,6 +25,11 @@ for label, description in zip(['input', 'output', 'idle'], sys.argv[1:]):
     pipeline = Gst.parse_launch_full(description, None, Gst.ParseFlags.FATAL_ERRORS)
     if label != 'output' and Gst.Bin.find_unlinked_pad(pipeline, Gst.PadDirection.SRC) is None:
         raise SystemExit(f'{label}: no output pad for the relay appsink')
+    if label == 'output':
+        appsrc = pipeline.get_by_name('appsrc')
+        required = Gst.Caps.from_string('video/x-raw,pixel-aspect-ratio=1/1')
+        if not appsrc.get_property('caps').is_subset(required):
+            raise SystemExit('Output caps must declare square pixels for V4L2 acceptance.')
     pipeline.set_state(Gst.State.NULL)
     print(f'PASS: {label} pipeline parses.')
 PYGST

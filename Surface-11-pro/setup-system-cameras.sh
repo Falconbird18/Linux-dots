@@ -52,6 +52,23 @@ s = s.replace(old, new)
 # object before changing its state instead.
 s = s.replace('if (input_pipeline != NULL)\n    gst_element_set_state (splash_pipeline,',
               'if (splash_pipeline != NULL)\n    gst_element_set_state (splash_pipeline,')
+# On output failure before any client opens a camera, upstream cleanup may
+# reference a nonexistent input pipeline/watch. Guard only those teardown calls.
+for variable in ['input_bus_watch_id', 'output_bus_watch_id', 'splash_bus_watch_id']:
+    old = f'  g_source_remove ({variable});'
+    new = f'  if ({variable} != 0)\n    g_source_remove ({variable});'
+    if s.count(old) != 1:
+        raise SystemExit(f'Unexpected relay cleanup for {variable}')
+    s = s.replace(old, new)
+for variable in ['input_pipeline', 'splash_pipeline']:
+    old = (f'  gst_element_set_state ({variable}, GST_STATE_NULL);\n'
+           f'  gst_object_unref (GST_OBJECT ({variable}));')
+    new = (f'  if ({variable} != NULL) {{\n'
+           f'    gst_element_set_state ({variable}, GST_STATE_NULL);\n'
+           f'    gst_object_unref (GST_OBJECT ({variable}));\n  }}')
+    if s.count(old) != 1:
+        raise SystemExit(f'Unexpected relay cleanup for {variable}')
+    s = s.replace(old, new)
 p.write_text(s)
 PY
     read -r -a ccflags <<< "$(pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gio-unix-2.0)"
@@ -136,6 +153,7 @@ UNIT
     if command -v update-desktop-database >/dev/null; then update-desktop-database "$DATA_HOME/applications"; fi
     systemctl --user daemon-reload
     systemctl --user enable surface11-camera-front.service surface11-camera-rear.service
+    systemctl --user reset-failed surface11-camera-front.service surface11-camera-rear.service
     systemctl --user restart surface11-camera-front.service surface11-camera-rear.service
     echo 'Installed. Two named V4L2 cameras start at login; physical capture starts on client demand.'
     echo 'Quit Discord fully, then use its NORMAL launcher. Run this script with check before opening it.'

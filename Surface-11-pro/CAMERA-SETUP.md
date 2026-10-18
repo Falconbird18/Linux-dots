@@ -96,3 +96,19 @@ real output pad for the relay. Install parses all three exact descriptions for
 both cameras first, without activating camera capture. The check waits up to ten
 seconds for each loopback to report capture mode and the expected format, and
 reports a missing frame file cleanly instead of producing a Python traceback.
+
+## Pixel-aspect-ratio negotiation correction
+
+The host's detailed V4L2 log reports square-pixel output formats with
+`pixel-aspect-ratio=1/1`. The previous appsrc caps omitted that field: they
+intersected the reported formats but were not a subset, so GStreamer's acceptance
+check rejected them. Input conversion, appsrc and idle descriptions now declare
+the ratio consistently. The pre-install validator checks that declaration.
+
+Reinstall also resets systemd's failed/start-limit state before restarting both
+relays. The pinned relay's teardown now guards absent input objects and event
+watches, keeping secondary cleanup warnings from obscuring the actual error.
+Validation reproduced the old rejection and accepted the new caps against the
+formats from the real host log. The adjusted relay compiles and a forced early
+output failure exits without null-object cleanup warnings. Actual capture still
+needs the updated installed services and the master installer's frame checks.
