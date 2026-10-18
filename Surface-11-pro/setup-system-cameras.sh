@@ -60,8 +60,7 @@ PY
     "$CACHE/v4l2-relayd" --version
     # The custom kernel is installed outside the distro package hooks, so build
     # its loopback module explicitly. This does not change kernel source files.
-    sudo dkms autoinstall -k "$kernel"
-    modinfo -k "$kernel" v4l2loopback >/dev/null || fail 'DKMS did not install v4l2loopback for the running kernel.'
+    bash "$SCRIPT_DIR/ensure-camera-module.sh" "$kernel"
     for f in /etc/modprobe.d/surface11-camera.conf /etc/modules-load.d/surface11-camera.conf /etc/udev/rules.d/70-surface11-camera.rules; do
       if [[ -e $f ]] && ! grep -q 'Managed by surface11-camera' "$f"; then fail "Refusing to overwrite $f"; fi
     done

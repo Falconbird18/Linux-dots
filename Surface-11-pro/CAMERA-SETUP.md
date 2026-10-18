@@ -65,3 +65,13 @@ bash setup-system-cameras.sh undo
 
 This removes the services and this setup's boot configuration. Reboot to remove
 the idle virtual devices; packages and native camera support remain installed.
+
+## Stale DKMS records after a custom rebuild
+
+The kernel build script removes the previous module directory. DKMS can still
+report v4l2loopback as installed afterward, causing `dkms autoinstall` to skip it.
+`ensure-camera-module.sh` now refreshes the module index and force-installs the
+specific module if it is missing. Kernel rebuilds also force compilation against
+the new build tree even when the release string is unchanged. Rerun `install`
+after pulling this correction; no additional sensor patch or reboot is needed
+unless module loading itself reports an error.

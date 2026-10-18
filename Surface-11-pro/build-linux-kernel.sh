@@ -7,6 +7,8 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
+CAMERA_MODULE_HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/ensure-camera-module.sh"
+
 KERNEL_VERSION="7.2.9"
 WORK_DIR="$HOME/surface-kernel-build"
 CUSTOM_SUFFIX="-surface11-custom"
@@ -521,8 +523,7 @@ echo "[*] Actual kernelrelease: $ACTUAL_KERNEL_RELEASE"
 # This builds an external module; it does not patch the kernel source.
 if [[ -f /etc/modules-load.d/surface11-camera.conf ]]; then
     command -v dkms >/dev/null || { echo "[-] Camera bridge requires DKMS."; exit 1; }
-    sudo dkms autoinstall -k "$ACTUAL_KERNEL_RELEASE"
-    modinfo -k "$ACTUAL_KERNEL_RELEASE" v4l2loopback >/dev/null
+    bash "$CAMERA_MODULE_HELPER" "$ACTUAL_KERNEL_RELEASE" rebuild
 fi
 
 
