@@ -249,30 +249,43 @@ touch drivers/platform/x86/intel/int3472/discrete.c
 touch include/linux/platform_data/x86/int3472.h
 
 
-# [5/11] Apply OV13858 camera power and IPU bridge fixes
+# [5/11] Apply OV13858 camera power, IPU bridge, and rotation fixes
 echo "=== [5/11] Applying OV13858 camera fixes ==="
 
 OV_FILE="drivers/media/i2c/ov13858.c"
 BRIDGE_FILE="drivers/media/pci/intel/ipu-bridge.c"
+BRIDGE_ENTRY='IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)'
+ROTATION_PRODUCT="Surface Pro for Business 11th Edition with Intel"
 
-if grep -q 'ov13858_supply_names' "$OV_FILE" &&
-   grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' "$BRIDGE_FILE"; then
-    echo "[+] Both OV13858 fixes are already present."
-else
-    if grep -q 'ov13858_supply_names' "$OV_FILE"; then
-        echo "[-] OV13858 power fix is present, but bridge fix is missing."
-        exit 1
-    fi
 
-    if grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' "$BRIDGE_FILE"; then
-        echo "[-] Bridge fix is present, but OV13858 power fix is missing."
-        exit 1
+# --- 5a. Apply or verify the OV13858 power patch ---
+echo "[+] Checking OV13858 power patch..."
+
+PATCH_MARKERS=(
+    "ov13858_supply_names"
+    "static int ov13858_power_on("
+    "static int ov13858_power_off("
+    "devm_regulator_bulk_get"
+    "devm_gpiod_get_optional"
+    "DEFINE_RUNTIME_DEV_PM_OPS(ov13858_pm_ops"
+    ".pm = pm_ptr(&ov13858_pm_ops)"
+)
+
+PRESENT=0
+for marker in "${PATCH_MARKERS[@]}"; do
+    if grep -Fq "$marker" "$OV_FILE"; then
+        ((PRESENT += 1))
     fi
+done
+
+if (( PRESENT == ${#PATCH_MARKERS[@]} )); then
+    echo "[+] All OV13858 power-patch markers are present; skipping patch."
+elif (( PRESENT == 0 )); then
+    echo "[+] OV13858 power patch is absent; downloading it..."
 
     PATCH_DIR="$(mktemp -d)"
     trap 'rm -rf "$PATCH_DIR"' EXIT
 
-    echo "[+] Downloading OV13858 power patch..."
     curl --fail --location --retry 3 \
         "https://lore-kernel.gnuweeb.org/linux-media/20260831130312.26296-1-lsa.uz@pm.me/raw" \
         -o "$PATCH_DIR/ov13858-power.eml"
@@ -286,13 +299,36 @@ else
         exit 1
     fi
 
-    echo "[+] Checking OV13858 patch..."
+    echo "[+] Checking whether the patch applies..."
     git apply --check "$PATCH_DIR/ov13858-power.patch"
 
     echo "[+] Applying OV13858 power patch..."
     git apply "$PATCH_DIR/ov13858-power.patch"
 
-    echo "[+] Adding OV13858 IPU bridge entry..."
+    rm -rf "$PATCH_DIR"
+    trap - EXIT
+
+    # Verify that all expected changes now exist.
+    for marker in "${PATCH_MARKERS[@]}"; do
+        if ! grep -Fq "$marker" "$OV_FILE"; then
+            echo "[-] Power-patch verification failed: missing $marker"
+            exit 1
+        fi
+    done
+
+    echo "[+] OV13858 power patch applied and verified."
+else
+    echo "[-] OV13858 driver appears partially patched."
+    echo "    Found $PRESENT of ${#PATCH_MARKERS[@]} expected markers."
+    echo "    Refusing to reapply the patch automatically."
+    echo "    Inspect drivers/media/i2c/ov13858.c before proceeding."
+    exit 1
+fi
+
+# --- 5b. Add the IPU bridge sensor entry, if missing ---
+echo "[+] Checking IPU bridge entry..."
+
+if ! grep -Fq "$BRIDGE_ENTRY" "$BRIDGE_FILE"; then
     python3 - <<'PYEOF'
 from pathlib import Path
 import sys
@@ -301,40 +337,136 @@ path = Path("drivers/media/pci/intel/ipu-bridge.c")
 text = path.read_text()
 
 entry = 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)'
-if entry in text:
-    print("[+] IPU bridge entry already present.")
-    sys.exit(0)
-
 anchor = '\t/* Omnivision OV13B10 */'
+
 if text.count(anchor) != 1:
     sys.exit("[-] Could not find a unique OV13B10 anchor in ipu-bridge.c.")
 
 text = text.replace(
     anchor,
     '\t/* Omnivision OV13858 */\n'
-    '\tIPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000),\n'
+    '\t' + entry + ',\n'
     + anchor,
     1,
 )
 path.write_text(text)
 print("[+] IPU bridge entry inserted.")
 PYEOF
-
-    rm -rf "$PATCH_DIR"
-    trap - EXIT
+else
+    echo "[+] IPU bridge entry already present."
 fi
 
+
+# --- 5c. Add/fix the Surface Pro 11 camera rotation quirk ---
+echo "[+] Checking Surface Pro 11 camera rotation quirk..."
+
+python3 - <<'PYEOF'
+from pathlib import Path
+import re
+import sys
+
+path = Path("drivers/media/pci/intel/ipu-bridge.c")
+text = path.read_text()
+
+anchor = "static const struct dmi_system_id upside_down_sensor_dmi_ids[] = {"
+if text.count(anchor) != 1:
+    sys.exit("[-] Could not find a unique upside-down sensor DMI table.")
+
+start = text.index(anchor) + len(anchor)
+end = text.index("\n};", start)
+table = text[start:end]
+
+product = "Surface Pro for Business 11th Edition with Intel"
+terminator = "\t{} /* Terminating entry */"
+
+entry_pattern = re.compile(
+    r'\t\{\s*'
+    r'\.matches\s*=\s*\{\s*'
+    r'DMI_EXACT_MATCH\(DMI_SYS_VENDOR,\s*"Microsoft Corporation"\),\s*'
+    r'DMI_EXACT_MATCH\(DMI_PRODUCT_NAME,\s*'
+    r'"Surface Pro for Business 11th Edition with Intel"\),\s*'
+    r'\},\s*'
+    r'\.driver_data\s*=\s*"OVTID858",\s*'
+    r'\},',
+    re.S
+)
+
+# Remove any existing copy of this exact entry from the table.
+table, count = entry_pattern.subn("", table)
+
+# Require exactly one terminating entry.
+if table.count(terminator) != 1:
+    sys.exit("[-] Could not find a unique DMI terminator; no changes saved.")
+
+# Insert immediately before the terminator.
+entry = '''\t{
+\t\t.matches = {
+\t\t\tDMI_EXACT_MATCH(DMI_SYS_VENDOR, "Microsoft Corporation"),
+\t\t\tDMI_EXACT_MATCH(DMI_PRODUCT_NAME,
+\t\t\t\t\t"Surface Pro for Business 11th Edition with Intel"),
+\t\t},
+\t\t.driver_data = "OVTID858",
+\t},
+'''
+
+table = table.replace(terminator, entry + terminator, 1)
+text = text[:start] + table + text[end:]
+path.write_text(text)
+
+print("[+] Surface Pro rotation entry is now before the DMI terminator.")
+PYEOF
+
+# Verify the entry is inside the table and before its terminator.
+python3 - <<'PYEOF'
+from pathlib import Path
+import sys
+
+text = Path("drivers/media/pci/intel/ipu-bridge.c").read_text()
+anchor = "static const struct dmi_system_id upside_down_sensor_dmi_ids[] = {"
+start = text.index(anchor)
+end = text.index("\n};", start)
+table = text[start:end]
+
+product = "Surface Pro for Business 11th Edition with Intel"
+terminator = "{} /* Terminating entry */"
+
+if table.count(product) != 1:
+    sys.exit("[-] Expected exactly one Surface Pro rotation entry.")
+if table.count(terminator) != 1:
+    sys.exit("[-] Expected exactly one DMI terminator.")
+if table.index(product) > table.index(terminator):
+    sys.exit("[-] Rotation entry is still after the terminator.")
+
+print("[+] Rotation entry and terminator ordering verified.")
+PYEOF
+
+# --- 5d. Verify the resulting source ---
+grep -Fq "$BRIDGE_ENTRY" "$BRIDGE_FILE" || {
+    echo "[-] IPU bridge entry verification failed."
+    exit 1
+}
+
+grep -Fq "$ROTATION_PRODUCT" "$BRIDGE_FILE" || {
+    echo "[-] Camera rotation quirk verification failed."
+    exit 1
+}
+
 grep -q 'ov13858_supply_names' "$OV_FILE" || {
-    echo "[-] OV13858 power patch verification failed."
+    echo "[-] OV13858 supply definitions were not found after patching."
     exit 1
 }
 
-grep -q 'IPU_SENSOR_CONFIG("OVTID858", 2, 540000000, 270000000)' "$BRIDGE_FILE" || {
-    echo "[-] IPU bridge patch verification failed."
-    exit 1
-}
+trap - EXIT
 
-echo "[+] Both camera fixes verified."
+echo "[+] IPU bridge entry and rotation quirk verified."
+echo "[!] The rotation fix sets metadata to 180 degrees; not every application"
+echo "    automatically rotates captured pixels."
+
+
+# --- 5e. Apply local Sony IMX681 patches ---
+echo "=== [5e] Applying Sony IMX681 front-camera patches ==="
+
+bash "$WORK_DIR/apply-imx681-patches.sh"
 
 echo "=== [6/11] Preparing Kernel Configuration ==="
 if [ -f .config ]; then
@@ -349,6 +481,7 @@ fi
 
 scripts/config --enable CONFIG_STAGING
 scripts/config --enable CONFIG_VIDEO_INTEL_IPU7
+scripts/config --module CONFIG_VIDEO_IMX681
 scripts/config --enable CONFIG_VIDEO_INTEL_IPU7_ISYS
 scripts/config --disable CONFIG_RUST
 scripts/config --set-str CONFIG_LOCALVERSION "$CUSTOM_SUFFIX"
@@ -360,6 +493,14 @@ scripts/config --module CONFIG_SND_SOC_RT1320_SDW || true
 scripts/config --module CONFIG_SND_SOC_SOF_SOUNDWIRE || true
 
 make olddefconfig
+
+if ! grep -q '^CONFIG_VIDEO_IMX681=m$' .config; then
+    echo "[-] CONFIG_VIDEO_IMX681 is not enabled as a module."
+    echo "    Check the driver's Kconfig dependencies and kernel configuration."
+    exit 1
+fi
+
+echo "[+] IMX681 will be built as a kernel module."
 
 echo "=== [7/11] Incremental compile ==="
 # Force rebuild of the changed SoundWire file
@@ -439,7 +580,7 @@ echo "  dmesg | grep -iE 'soundwire|rt1320|sof'"
 
 
 
-# Need to add getting camera working.
+# Might need to add getting camera working.
 #
 # mkdir -p ~/.config/wireplumber/wireplumber.conf.d
 

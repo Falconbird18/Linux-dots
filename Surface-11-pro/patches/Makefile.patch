@@ -1,0 +1,14 @@
+diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
+index fd1cb25718c..98bcecf0c43 100644
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -64,6 +64,7 @@ obj-$(CONFIG_VIDEO_IMX412) +=3D imx412.o
+ obj-$(CONFIG_VIDEO_IMX415) +=3D imx415.o
+ obj-$(CONFIG_VIDEO_IMX678) +=3D imx678.o
+ obj-$(CONFIG_VIDEO_IMX471) +=3D imx471.o
++obj-$(CONFIG_VIDEO_IMX681) +=3D imx681.o
+ obj-$(CONFIG_VIDEO_IR_I2C) +=3D ir-kbd-i2c.o
+ obj-$(CONFIG_VIDEO_ISL7998X) +=3D isl7998x.o
+ obj-$(CONFIG_VIDEO_IT6625) +=3D it6625.o
+
+ 
