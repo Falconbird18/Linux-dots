@@ -517,6 +517,15 @@ echo "=== [9/11] Installing kernel image to ESP ($ESP) ==="
 ACTUAL_KERNEL_RELEASE=$(make -s kernelrelease)
 echo "[*] Actual kernelrelease: $ACTUAL_KERNEL_RELEASE"
 
+# Keep the standard-camera bridge available after a custom kernel rebuild.
+# This builds an external module; it does not patch the kernel source.
+if [[ -f /etc/modules-load.d/surface11-camera.conf ]]; then
+    command -v dkms >/dev/null || { echo "[-] Camera bridge requires DKMS."; exit 1; }
+    sudo dkms autoinstall -k "$ACTUAL_KERNEL_RELEASE"
+    modinfo -k "$ACTUAL_KERNEL_RELEASE" v4l2loopback >/dev/null
+fi
+
+
 # Make sure ESP is accessible
 if [ ! -d "$ESP" ]; then
     echo "[-] ESP directory $ESP does not exist or is not mounted!"
@@ -580,17 +589,9 @@ echo "  dmesg | grep -iE 'soundwire|rt1320|sof'"
 
 
 
-# Might need to add getting camera working.
-#
-# mkdir -p ~/.config/wireplumber/wireplumber.conf.d
-
-# printf '%s\n' \
-#         'wireplumber.profiles = {' \
-#         '  main = {' \
-#         '    monitor.v4l2 = disabled' \
-#         '    monitor.libcamera = optional' \
-#         '  }' \
-#         '}' \
-#         > ~/.config/wireplumber/wireplumber.conf.d/99-prefer-libcamera.conf
-#
-# systemctl --user restart wireplumber
+# Standard V4L2 camera setup (run as the desktop user after reboot).
+# Native cameras are processed by libcamera/PipeWire and exposed by on-demand
+# loopback relays; no app-specific preload or alternate Discord launcher.
+#   bash "$(dirname -- "${BASH_SOURCE[0]}")/setup-system-cameras.sh" install
+#   bash "$(dirname -- "${BASH_SOURCE[0]}")/setup-system-cameras.sh" check
+#   bash "$(dirname -- "${BASH_SOURCE[0]}")/setup-system-cameras.sh" undo
