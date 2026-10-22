@@ -30,19 +30,76 @@ Before you install, check that you have the following dependencies installed (an
 - `webkit` - Specifically `webkit2gtk-4.1` for arch
 ## Installation
 
-To install, run the install script, or the following commands.
-```
-bash <(curl -s "https://raw.githubusercontent.com/Falconbird18/Frolic-dotfiles/main/install.sh")
+Run from this checkout as your normal user (from any working directory):
+
+```bash
+./install.sh --dry-run    # preview file changes
+./install.sh              # install configs and bundled user assets
+./install.sh --packages   # also install core desktop dependencies on Arch
+./install.sh --keyd       # also install/enable the bundled keyd keyboard layout
 ```
 
-**Important:** The following commands will overwrite any existing configs for hyprland, ags, wofi, starship, fish, and spicetify. Back up any configs you do not want to lose before installing.
+`install-dots.sh` is an alias for the same installer and accepts the same options.
+Use `--packages --keyd` together to include both optional system setup steps.
+The installer uses this checkout, including local edits; it does not download an
+older copy of the dots or run third-party installers.
+
+Every entry in `.config` is installed, including hidden files and newly added
+folders. Existing directories are merged, and unrelated files are kept. Each
+replaced file or symlink is moved to a unique backup directory under
+`${XDG_STATE_HOME:-~/.local/state}/dotfiles/backups` with its relative path retained.
+The backup location is printed when installation finishes. To restore an entry,
+copy it from that directory to its original destination.
+
+Bundled `.local/bin`, `.local/share`, `.icons`, `.spicetify`, and wallpapers are
+also installed. Wallpapers go to `~/Pictures/wallpapers`. The installer respects
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME`. Repeat runs skip identical files.
+System settings are only changed with `--keyd`; the previous keyboard layout is
+backed up in `/etc/keyd/dotfiles-backup-*`. `--packages` installs core desktop
+tools; optional apps and the current DMS shell must be installed separately.
+
+### MuseScore at 200% scaling
+
+The bundled app-menu override and `~/.local/bin/mscore` wrapper select native
+Wayland using `MU_QT_QPA_PLATFORM=wayland`. MuseScore overrides the ordinary
+`QT_QPA_PLATFORM` setting, which can leave it rendering through XWayland and
+looking blurry. See the [upstream explanation](https://github.com/musescore/MuseScore/issues/30247).
+Install the dots, then fully quit and reopen MuseScore. On Arch, native Wayland
+requires `qt6-wayland` (included with `--packages`). Ensure `~/.local/bin` is in
+`PATH` for terminal launches. The app-menu entry works without this PATH change.
+If you encounter a MuseScore Wayland bug, use
+`MU_QT_QPA_PLATFORM=xcb ~/.local/bin/mscore` as a temporary fallback.
+
+## Sonora on Arch Linux
+
+Run `./install-sonora.sh` from this checkout as your normal user. It downloads
+the latest stable release from [Falconbird18/Sonora](https://github.com/Falconbird18/Sonora/releases),
+verifies the binary against GitHub's SHA-256 digest, and repackages the official
+Debian binary as `sonora-bin` for pacman. No Rust or Node build is needed.
+
+Install prerequisites if needed:
+
+```bash
+sudo pacman -S --needed base-devel curl python libarchive
+./install-sonora.sh
 ```
-git clone https://github.com/Falconbird18/Frolic-dotfiles.git
-cp -r ~/Frolic-dotfiles/.config/* ~/.config/
-cp ~/Frolic-dotfiles/.local/bin/hyprland-flee-bravely ~/.local/bin/
-cp -r ~/Frolic-dotfiles/.spicetify/ ~/
-cp -r ~/Frolic-dotfiles/.icons ~/
-```
+
+The installer uses makepkg to install runtime dependencies and the package,
+with sudo requested when needed. It includes the upstream app menu entry,
+icons and license, and selects native Wayland in Wayland sessions for sharp
+HiDPI rendering. X11 sessions remain supported.
+
+Rerun the installer to update, or choose a release with
+`./install-sonora.sh --tag V1.2.2`. Use `--build-only` to build without installing
+(runtime dependencies must already be installed). Packages are saved under
+`${XDG_CACHE_HOME:-$HOME/.cache}/sonora-installer`.
+
+The selected release must provide a `.deb` for your architecture and a GitHub
+SHA-256 digest. The current V1.2.2 release provides x86_64 binaries only; the
+installer also recognizes arm64 releases if those are published later.
+
+Launch with `sonora` or the app menu. Remove with `sudo pacman -Rns sonora-bin`;
+your app data is retained.
 
 ## Credits
 Thanks to [PoSayDone](https://github.com/PoSayDone) for the base ags widget. 

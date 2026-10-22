@@ -17,6 +17,6 @@ done
   exit 1
 }
 [[ $(cat "/sys/class/video4linux/video$number/name") == "$name" ]] || exit 1
-# The process owns the node: stopping/restarting this service removes it. No
-# linger, continuous capture, second sensor backend, or PipeWire restart needed.
-exec pw-cli -m create-node adapter "{ factory.name=api.v4l2.source api.v4l2.path=/dev/video$number node.name=surface11-camera-$1 node.description=\"$name\" media.class=Video/Source media.role=Camera node.driver=true priority.session=$priority }"
+# The publisher copies local mmap frames into PipeWire shared-memory buffers.
+# Its capture pipeline opens only while a PipeWire client is streaming.
+exec /usr/local/libexec/surface11-camera/surface-camera-publisher "$1"

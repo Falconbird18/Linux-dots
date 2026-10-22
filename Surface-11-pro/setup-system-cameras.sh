@@ -11,6 +11,9 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 UNIT_DIR="$CONF_HOME/systemd/user"
 WP_CONF="$CONF_HOME/wireplumber/wireplumber.conf.d/90-surface11-camera.conf"
 WP_SCRIPT="$DATA_HOME/wireplumber/scripts/surface11-camera-policy.lua"
+WP_PORTAL="$DATA_HOME/wireplumber/scripts/client/find-portal-access.lua"
+IPA_DIR="$DATA_HOME/surface11-camera/ipa"
+IPA_UNIT="$UNIT_DIR/wireplumber.service.d/90-surface11-camera-ipa.conf"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/surface11-camera"
 [[ $EUID -ne 0 ]] || { echo 'Run as your desktop user; sudo is requested only where needed.' >&2; exit 1; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -18,19 +21,31 @@ check_names() {
   [[ $(cat /sys/class/video4linux/video42/name 2>/dev/null) == 'Surface Front Camera' ]] &&
   [[ $(cat /sys/class/video4linux/video43/name 2>/dev/null) == 'Surface Rear Camera' ]]
 }
+check_routes() {
+  if python3 "$SCRIPT_DIR/check-camera-routing.py"; then return 0; fi
+  echo 'Shared cameras are missing. Relay/publisher startup details:' >&2
+  systemctl --user --no-pager --full status \
+    surface11-camera-front.service surface11-camera-rear.service \
+    surface11-camera-front-publish.service surface11-camera-rear-publish.service || true
+  journalctl --user --no-pager --since '-2 minutes' -n 60 \
+    -u surface11-camera-front -u surface11-camera-rear \
+    -u surface11-camera-front-publish -u surface11-camera-rear-publish || true
+  fail 'Camera services did not publish the shared devices; inspect the startup error above.'
+}
 case "${1:-check}" in
   install)
     kernel=$(uname -r)
     [[ -f /usr/lib/modules/$kernel/build/Module.symvers ]] || fail "Matching build tree is missing for $kernel."
     # Keep distro PipeWire libraries matched. Never refresh databases without a full upgrade.
     sudo pacman -S --needed base-devel git python python-gobject dkms v4l2loopback-dkms v4l-utils \
-      pipewire wireplumber pipewire-libcamera libcamera libcamera-ipa gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire
+      pipewire wireplumber pipewire-libcamera libcamera libcamera-ipa gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire \
+      meson ninja curl patch python-jinja python-yaml python-ply python-pyparsing libyaml gnutls
     wp_version=$(pacman -Q wireplumber | awk '{print $2}')
     (( $(vercmp "$wp_version" 0.5.18) >= 0 )) || fail 'WirePlumber 0.5.18 or newer is required for private camera backends.'
-    for source in publish-surface-camera.sh check-camera-routing.py wireplumber/90-surface11-camera.conf wireplumber/surface11-camera-policy.lua; do
+    for source in patch-relay-lifecycle.py check-shared-camera.py surface-camera-publisher.c reprobe-front-sensor.sh surface-camera-ipa-env.sh build-imx681-ipa.sh patches/libcamera-imx681-helper.patch tests/test-imx681-gain.cpp prepare-camera-portal.py publish-surface-camera.sh check-camera-routing.py wireplumber/90-surface11-camera.conf wireplumber/surface11-camera-policy.lua; do
       [[ -f $SCRIPT_DIR/$source ]] || fail "Missing $source; keep the installer folder together."
     done
-    for file in "$WP_CONF" "$WP_SCRIPT"; do
+    for file in "$WP_CONF" "$WP_SCRIPT" "$WP_PORTAL" "$IPA_UNIT"; do
       if [[ -e $file ]] && ! grep -q 'Managed by surface11-camera' "$file"; then fail "Refusing to overwrite $file"; fi
     done
     # Refuse to reuse numbers belonging to unrelated devices.
@@ -42,12 +57,15 @@ case "${1:-check}" in
       fi
     done
     mkdir -p "$CACHE" "$UNIT_DIR"
+    python3 "$SCRIPT_DIR/prepare-camera-portal.py" \
+      /usr/share/wireplumber/scripts/client/find-portal-access.lua "$CACHE/find-portal-access.lua"
     if [[ ! -d $CACHE/relay-source/.git ]]; then
       git clone --no-checkout "$RELAY_URL" "$CACHE/relay-source"
     fi
     git -C "$CACHE/relay-source" cat-file -e "$RELAY_REF^{commit}" 2>/dev/null ||
       git -C "$CACHE/relay-source" fetch origin "$RELAY_REF"
     # Extract the pinned file, without modifying the checkout or kernel sources.
+    bash "$SCRIPT_DIR/build-imx681-ipa.sh" "$CACHE/imx681-ipa"
     git -C "$CACHE/relay-source" show "$RELAY_REF:src/v4l2-relayd.c" > "$CACHE/relay.c"
     python3 - "$CACHE/relay.c" <<'PY'
 from pathlib import Path
@@ -102,17 +120,20 @@ replace_once('  g_main_loop_unref (loop);',
              '  g_main_loop_unref (loop);')
 p.write_text(s)
 PY
+    python3 "$SCRIPT_DIR/patch-relay-lifecycle.py" "$CACHE/relay.c"
     read -r -a ccflags <<< "$(pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gio-unix-2.0)"
     read -r -a ldflags <<< "$(pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gio-unix-2.0)"
     cc -O2 -Wall -I"$SCRIPT_DIR" "-DV4L2_RELAYD_VERSION=\"surface11-$RELAY_REF\"" "${ccflags[@]}" \
       "$CACHE/relay.c" -o "$CACHE/v4l2-relayd" "${ldflags[@]}"
     "$CACHE/v4l2-relayd" --version
+    read -r -a pubflags <<< "$(pkg-config --cflags --libs libpipewire-0.3 gstreamer-app-1.0 gstreamer-video-1.0)"
+    cc -O2 -Wall -Wextra "$SCRIPT_DIR/surface-camera-publisher.c" -o "$CACHE/surface-camera-publisher" "${pubflags[@]}"
     bash "$SCRIPT_DIR/surface-camera-relay.sh" front --validate
     bash "$SCRIPT_DIR/surface-camera-relay.sh" rear --validate
     # The custom kernel is installed outside the distro package hooks, so build
     # its loopback module explicitly. This does not change kernel source files.
     bash "$SCRIPT_DIR/ensure-camera-module.sh" "$kernel"
-    for f in /etc/modprobe.d/surface11-camera.conf /etc/modules-load.d/surface11-camera.conf /etc/udev/rules.d/70-surface11-camera.rules; do
+    for f in /etc/modprobe.d/surface11-camera.conf /etc/modules-load.d/surface11-camera.conf /etc/udev/rules.d/70-surface11-camera.rules /etc/systemd/system/surface11-camera-sensor.service; do
       if [[ -e $f ]] && ! grep -q 'Managed by surface11-camera' "$f"; then fail "Refusing to overwrite $f"; fi
     done
     if [[ -d $LIBEXEC && ! -f $LIBEXEC/managed-by-surface11-camera ]]; then fail "Unmanaged directory: $LIBEXEC"; fi
@@ -131,17 +152,52 @@ CONFIG
 SUBSYSTEM=="video4linux", KERNEL=="video42", ATTR{name}=="Surface Front Camera", GROUP="video", MODE="0660", TAG+="uaccess", SYMLINK+="surface-front-camera"
 SUBSYSTEM=="video4linux", KERNEL=="video43", ATTR{name}=="Surface Rear Camera", GROUP="video", MODE="0660", TAG+="uaccess", SYMLINK+="surface-rear-camera"
 RULES
+    mkdir -p "$IPA_DIR" "$(dirname "$IPA_UNIT")"
+    cat > "$CACHE/ipa-unit.conf" <<UNIT
+# Managed by surface11-camera
+[Service]
+ExecStartPre=$LIBEXEC/surface-camera-ipa-env.sh "$IPA_DIR" "$CACHE/ipa-env" "$WP_PORTAL"
+EnvironmentFile=-$CACHE/ipa-env
+UNIT
     sudo install -d "$LIBEXEC"
     sudo touch "$LIBEXEC/managed-by-surface11-camera"
     sudo install -m 755 "$CACHE/v4l2-relayd" "$LIBEXEC/v4l2-relayd"
+    sudo install -m 755 "$CACHE/surface-camera-publisher" "$LIBEXEC/surface-camera-publisher"
+    sudo install -m 755 "$SCRIPT_DIR/reprobe-front-sensor.sh" "$LIBEXEC/reprobe-front-sensor.sh"
     sudo install -m 755 "$SCRIPT_DIR/surface-camera-relay.sh" "$LIBEXEC/surface-camera-relay.sh"
     sudo install -m 755 "$SCRIPT_DIR/publish-surface-camera.sh" "$LIBEXEC/publish-surface-camera.sh"
-    mkdir -p "$(dirname "$WP_CONF")" "$(dirname "$WP_SCRIPT")"
-    wp_changed=0
+    sudo install -m 755 "$SCRIPT_DIR/surface-camera-ipa-env.sh" "$LIBEXEC/surface-camera-ipa-env.sh"
+    sudo install -m 755 "$SCRIPT_DIR/prepare-camera-portal.py" "$LIBEXEC/prepare-camera-portal.py"
+    mkdir -p "$(dirname "$WP_CONF")" "$(dirname "$WP_SCRIPT")" "$(dirname "$WP_PORTAL")"
+    front_was_missing=0
+    [[ -L /sys/bus/i2c/devices/i2c-SONY0681:00/driver ]] || front_was_missing=1
+    cat > "$CACHE/sensor.service" <<UNIT
+# Managed by surface11-camera
+[Unit]
+Description=Retry an unbound Intel Surface front camera after initial module probing
+After=systemd-modules-load.service
+Before=systemd-user-sessions.service
+[Service]
+Type=oneshot
+ExecStart=$LIBEXEC/reprobe-front-sensor.sh
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo install -m 644 "$CACHE/sensor.service" /etc/systemd/system/surface11-camera-sensor.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now surface11-camera-sensor.service
+    wp_changed=$front_was_missing
     if ! cmp -s "$SCRIPT_DIR/wireplumber/90-surface11-camera.conf" "$WP_CONF" ||
-       ! cmp -s "$SCRIPT_DIR/wireplumber/surface11-camera-policy.lua" "$WP_SCRIPT"; then wp_changed=1; fi
+       ! cmp -s "$SCRIPT_DIR/wireplumber/surface11-camera-policy.lua" "$WP_SCRIPT" ||
+       ! cmp -s "$CACHE/find-portal-access.lua" "$WP_PORTAL" ||
+       ! cmp -s "$CACHE/imx681-ipa/ipa/ipa_soft_simple.so" "$IPA_DIR/ipa_soft_simple.so" ||
+       ! cmp -s "$CACHE/ipa-unit.conf" "$IPA_UNIT"; then wp_changed=1; fi
     install -m 644 "$SCRIPT_DIR/wireplumber/90-surface11-camera.conf" "$WP_CONF"
     install -m 644 "$SCRIPT_DIR/wireplumber/surface11-camera-policy.lua" "$WP_SCRIPT"
+    install -m 644 "$CACHE/find-portal-access.lua" "$WP_PORTAL"
+    install -m 755 "$CACHE/imx681-ipa/ipa/ipa_soft_simple.so" "$IPA_DIR/ipa_soft_simple.so"
+    install -m 644 "$CACHE/imx681-ipa/packages.txt" "$IPA_DIR/packages.txt"
+    install -m 644 "$CACHE/ipa-unit.conf" "$IPA_UNIT"
     sudo install -m 644 "$CACHE/modprobe.conf" /etc/modprobe.d/surface11-camera.conf
     sudo install -m 644 "$CACHE/modules.conf" /etc/modules-load.d/surface11-camera.conf
     sudo install -m 644 "$CACHE/udev.rules" /etc/udev/rules.d/70-surface11-camera.rules
@@ -215,14 +271,22 @@ UNIT
     fi
     systemctl --user restart surface11-camera-front.service surface11-camera-rear.service
     systemctl --user enable --now surface11-camera-front-publish.service surface11-camera-rear-publish.service
-    python3 "$SCRIPT_DIR/check-camera-routing.py"
+    check_routes
     echo 'Installed. Two named V4L2 cameras start at login; physical capture starts on client demand.'
     echo 'Quit Discord fully, then use its NORMAL launcher. Run this script with check before opening it.'
+    ;;
+  quality)
+    check_names || fail 'Standard Surface webcams are not installed. Run install first.'
+    check_routes
+    for number in 42 43; do
+      v4l2-ctl -d "/dev/video$number" --get-fmt-video --get-parm
+    done
+    python3 "$SCRIPT_DIR/check-camera-quality.py"
     ;;
   check)
     check_started=$(date --iso-8601=seconds)
     check_names || fail 'Standard Surface webcam devices are not installed. Run install first.'
-    python3 "$SCRIPT_DIR/check-camera-routing.py"
+    check_routes
     systemctl --user --no-pager status surface11-camera-front.service surface11-camera-rear.service
     failed=0
     capture_dir=$(mktemp -d)
@@ -271,41 +335,41 @@ PYIMAGE
         echo "FAIL: video$number" >&2; failed=1
       fi
     done
-    for camera in front rear; do
-      echo "Testing shared PipeWire $camera webcam..."
-      if timeout --kill-after=2s 15s gst-launch-1.0 -q pipewiresrc \
-          target-object="surface11-camera-$camera" num-buffers=30 ! \
-          video/x-raw,format=YUY2,width=640,height=480 ! fakesink sync=false; then
-        echo "PASS: shared $camera webcam delivers frames to PipeWire apps."
-      else
-        echo "FAIL: shared PipeWire $camera webcam" >&2
-        failed=1
-      fi
-    done
-    echo 'Recent relay logs (no images are saved):'
-    journalctl --user -u surface11-camera-front -u surface11-camera-rear --since "$check_started" -n 25 --no-pager
+    # Actual images must change after warmup, twice per camera across reopen.
+    # A fakesink consuming 30 placeholders was not sufficient evidence.
+    if ! python3 "$SCRIPT_DIR/check-shared-camera.py"; then failed=1; fi
+    echo 'Recent relay/publisher logs (no images are saved):'
+    journalctl --user -u surface11-camera-front -u surface11-camera-rear \
+      -u surface11-camera-front-publish -u surface11-camera-rear-publish \
+      --since "$check_started" -n 60 --no-pager
     exit "$failed"
     ;;
   undo)
+    if grep -q 'Managed by surface11-camera' /etc/systemd/system/surface11-camera-sensor.service 2>/dev/null; then
+      sudo systemctl disable --now surface11-camera-sensor.service || true
+    fi
     systemctl --user disable --now surface11-camera-front-publish.service surface11-camera-rear-publish.service || true
     systemctl --user disable --now surface11-camera-front.service surface11-camera-rear.service || true
     rm -f "$UNIT_DIR/surface11-camera-front.service" "$UNIT_DIR/surface11-camera-rear.service"
     rm -f "$UNIT_DIR/surface11-camera-front-publish.service" "$UNIT_DIR/surface11-camera-rear-publish.service"
     wp_removed=0
-    for file in "$WP_CONF" "$WP_SCRIPT"; do
+    for file in "$WP_CONF" "$WP_SCRIPT" "$WP_PORTAL" "$IPA_UNIT"; do
       if [[ -f $file ]] && grep -q 'Managed by surface11-camera' "$file"; then rm "$file"; wp_removed=1; fi
     done
+    rm -f "$IPA_DIR/ipa_soft_simple.so" "$IPA_DIR/packages.txt" "$CACHE/ipa-env"
+    systemctl --user daemon-reload
     if (( wp_removed )); then systemctl --user restart wireplumber.service; fi
     systemctl --user daemon-reload
-    for f in /etc/modprobe.d/surface11-camera.conf /etc/modules-load.d/surface11-camera.conf /etc/udev/rules.d/70-surface11-camera.rules; do
+    for f in /etc/modprobe.d/surface11-camera.conf /etc/modules-load.d/surface11-camera.conf /etc/udev/rules.d/70-surface11-camera.rules /etc/systemd/system/surface11-camera-sensor.service; do
       if [[ -f $f ]] && grep -q 'Managed by surface11-camera' "$f"; then sudo rm "$f"; fi
     done
     if [[ -f $LIBEXEC/managed-by-surface11-camera ]]; then
-      sudo rm -f "$LIBEXEC/v4l2-relayd" "$LIBEXEC/surface-camera-relay.sh" "$LIBEXEC/publish-surface-camera.sh" "$LIBEXEC/managed-by-surface11-camera"
+      sudo rm -f "$LIBEXEC/v4l2-relayd" "$LIBEXEC/surface-camera-relay.sh" "$LIBEXEC/publish-surface-camera.sh" "$LIBEXEC/surface-camera-ipa-env.sh" "$LIBEXEC/prepare-camera-portal.py" "$LIBEXEC/surface-camera-publisher" "$LIBEXEC/reprobe-front-sensor.sh" "$LIBEXEC/managed-by-surface11-camera"
       sudo rmdir "$LIBEXEC"
     fi
+    sudo systemctl daemon-reload
     sudo udevadm control --reload-rules
     echo 'Removed services and boot configuration. Reboot to remove the idle webcam devices. Packages are retained.'
     ;;
-  *) fail 'Usage: bash setup-system-cameras.sh {install|check|undo}' ;;
+  *) fail 'Usage: bash setup-system-cameras.sh {install|check|quality|undo}' ;;
 esac

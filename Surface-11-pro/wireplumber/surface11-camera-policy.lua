@@ -1,7 +1,8 @@
 -- Managed by surface11-camera. Requires WirePlumber 0.5.18 permission managers.
 -- Extend the selected manager so portal/sandbox checks on public cameras stay
--- intact. The native nodes have a non-Camera media.role to avoid an overlapping
--- portal grant (permission-manager matches are combined with bitwise OR).
+-- intact. prepare-camera-portal.py also vetoes native nodes inside the stock
+-- portal grant: SPA overwrites the configured media.role back to Camera, and a
+-- separate NONE match cannot veto an overlapping grant (matches use bitwise OR).
 local log = Log.open_topic ("surface11-camera")
 local configured = {}
 

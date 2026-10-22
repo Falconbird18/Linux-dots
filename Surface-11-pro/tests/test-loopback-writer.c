@@ -8,6 +8,7 @@
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 #include <stdarg.h>
+#include <stddef.h>
 
 static GstSample *next_sample;
 static int writes, closes, opens, write_mode, ioctl_mode;
@@ -30,12 +31,26 @@ static int fake_ioctl (int fd, unsigned long request, ...) {
     struct v4l2_capability *cap = arg;
     strcpy ((char *) cap->driver, "v4l2 loopback");
     cap->capabilities = V4L2_CAP_DEVICE_CAPS;
-    cap->device_caps = V4L2_CAP_VIDEO_OUTPUT | V4L2_CAP_READWRITE;
+    cap->device_caps = V4L2_CAP_VIDEO_OUTPUT | V4L2_CAP_READWRITE | V4L2_CAP_EXT_PIX_FORMAT;
+    if (ioctl_mode == 5) cap->device_caps &= ~V4L2_CAP_EXT_PIX_FORMAT;
     if (ioctl_mode == 3) strcpy ((char *) cap->driver, "unrelated");
   } else if (request == VIDIOC_S_FMT) {
     struct v4l2_format *fmt = arg;
+    /* Model the kernel's v4l_sanitize_format(): extended colour fields are
+     * discarded unless applications mark them as initialized. The previous
+     * fake ioctl skipped this step and let the startup regression pass. */
+    if (fmt->fmt.pix.priv != V4L2_PIX_FMT_PRIV_MAGIC) {
+      fmt->fmt.pix.priv = V4L2_PIX_FMT_PRIV_MAGIC;
+      size_t offset = offsetof (struct v4l2_pix_format, priv) + sizeof (fmt->fmt.pix.priv);
+      memset ((guint8 *) &fmt->fmt.pix + offset, 0, sizeof (fmt->fmt.pix) - offset);
+    }
     g_assert_cmpint (fmt->type, ==, V4L2_BUF_TYPE_VIDEO_OUTPUT);
     g_assert_cmpint (fmt->fmt.pix.pixelformat, ==, V4L2_PIX_FMT_YUYV);
+    g_assert_cmpint (fmt->fmt.pix.colorspace, ==, V4L2_COLORSPACE_SMPTE170M);
+    g_assert_cmpint (fmt->fmt.pix.ycbcr_enc, ==, V4L2_YCBCR_ENC_601);
+    g_assert_cmpint (fmt->fmt.pix.quantization, ==, V4L2_QUANTIZATION_LIM_RANGE);
+    g_assert_cmpint (fmt->fmt.pix.xfer_func, ==, V4L2_XFER_FUNC_709);
+    if (ioctl_mode == 4) fmt->fmt.pix.quantization = V4L2_QUANTIZATION_FULL_RANGE;
     if (ioctl_mode == 2) fmt->fmt.pix.width = 320;
   } else {
     g_assert_cmpuint (request, ==, VIDIOC_S_PARM);
@@ -72,7 +87,7 @@ int main (int argc, char **argv) {
   g_assert_false (loopback_writer_attach (pipeline));
   g_assert_cmpint (opens, ==, 0);
   g_setenv ("SURFACE11_LOOPBACK_DEVICE", "/dev/test-loopback", TRUE);
-  for (ioctl_mode = 1; ioctl_mode <= 3; ioctl_mode++) {
+  for (ioctl_mode = 1; ioctl_mode <= 5; ioctl_mode++) {
     g_assert_false (loopback_writer_attach (pipeline));
     g_assert_cmpint (loopback_fd, ==, -1);
     g_assert_cmpint (closes, ==, ioctl_mode);
@@ -80,7 +95,7 @@ int main (int argc, char **argv) {
   ioctl_mode = 0;
   g_assert_true (loopback_writer_attach (pipeline));
 
-  GstCaps *caps = gst_caps_from_string ("video/x-raw,format=YUY2,width=640,height=480,framerate=30/1");
+  GstCaps *caps = gst_caps_from_string ("video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,colorimetry=bt601");
   /* Verify both packed frames and frames with eight padding bytes per row. */
   for (gint stride = 1280; stride <= 1288; stride += 8) {
     GstBuffer *buffer = gst_buffer_new_allocate (NULL, stride * 480, NULL);
@@ -103,7 +118,16 @@ int main (int argc, char **argv) {
     gst_sample_unref (next_sample);
     gst_buffer_unref (buffer);
   }
-  GstCaps *bad_caps = gst_caps_from_string ("video/x-raw,format=RGB,width=640,height=480,framerate=30/1");
+  GstCaps *wrong_color = gst_caps_from_string ("video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,colorimetry=bt709");
+  GstBuffer *color_buffer = gst_buffer_new_allocate (NULL, 640 * 480 * 2, NULL);
+  next_sample = gst_sample_new (color_buffer, wrong_color, NULL, NULL);
+  writes = 0;
+  g_assert_cmpint (loopback_writer_sample (sink, NULL), ==, GST_FLOW_ERROR);
+  g_assert_cmpint (writes, ==, 0);
+  gst_sample_unref (next_sample);
+  gst_buffer_unref (color_buffer);
+  gst_caps_unref (wrong_color);
+  GstCaps *bad_caps = gst_caps_from_string ("video/x-raw,format=RGB,width=640,height=480,framerate=30/1,colorimetry=bt601");
   GstBuffer *buffer = gst_buffer_new_allocate (NULL, 640 * 480 * 3, NULL);
   next_sample = gst_sample_new (buffer, bad_caps, NULL, NULL);
   writes = 0;

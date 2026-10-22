@@ -6,10 +6,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 usage() {
   cat <<'HELP'
-Usage: bash install-surface11.sh [install|status|cameras|kernel|undo-cameras]
+Usage: bash install-surface11.sh [install|status|cameras|quality|kernel|undo-cameras]
   install       Default: build patched kernel if needed; otherwise install cameras.
   status        Show detected hardware, kernel and camera service status.
   cameras       Install/repair standard webcams on the patched custom kernel.
+  quality       Measure exposure stability/clipping on both shared app routes.
   kernel        Build/install the patched kernel while booted into another kernel.
   undo-cameras  Remove the webcam bridge, keeping kernel drivers and packages.
 
@@ -22,7 +23,7 @@ HELP
 mode=${1:-install}
 case "$mode" in -h|--help|help) usage; exit 0;; esac
 [[ $# -le 1 ]] || fail 'Expected one optional command; see --help.'
-case "$mode" in install|status|cameras|kernel|undo-cameras) ;; *) usage >&2; exit 2;; esac
+case "$mode" in install|status|cameras|quality|kernel|undo-cameras) ;; *) usage >&2; exit 2;; esac
 [[ $EUID -ne 0 ]] || fail 'Run as your desktop user, not with sudo before the whole command.'
 [[ $(uname -m) == x86_64 ]] || fail 'This is the Intel installer; Snapdragon/ARM models are unsupported.'
 vendor=$(cat /sys/class/dmi/id/sys_vendor)
@@ -31,7 +32,7 @@ sku=$(cat /sys/class/dmi/id/product_sku)
   fail "Unsupported hardware: $vendor / $sku. Model-specific patches will not be applied."
 command -v pacman >/dev/null || fail 'This installer currently supports Arch-based distributions only.'
 command -v systemctl >/dev/null || fail 'systemd is required.'
-for helper in build-linux-kernel.sh apply-imx681-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py loopback-writer.h; do
+for helper in build-linux-kernel.sh apply-imx681-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py check-camera-quality.py prepare-camera-portal.py build-imx681-ipa.sh surface-camera-ipa-env.sh surface-camera-publisher.c reprobe-front-sensor.sh patch-relay-lifecycle.py check-shared-camera.py loopback-writer.h; do
   [[ -f $SCRIPT_DIR/$helper ]] || fail "Missing $helper; keep the entire installer folder together."
 done
 for patch in imx681.patch Kconfig.patch Makefile.patch; do
@@ -60,6 +61,7 @@ case "$mode" in
     done
     systemctl --user --no-pager status surface11-camera-front.service surface11-camera-rear.service || true
     ;;
+  quality) bash "$SCRIPT_DIR/setup-system-cameras.sh" quality ;;
   undo-cameras) bash "$SCRIPT_DIR/setup-system-cameras.sh" undo ;;
   install|cameras|kernel)
     if [[ $mode == kernel || ( $mode == install && $running != "$target" ) ]]; then
