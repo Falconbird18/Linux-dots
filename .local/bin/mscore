@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# MuseScore overrides QT_QPA_PLATFORM; its own override enables sharp HiDPI.
+# Honour a user override, e.g. MU_QT_QPA_PLATFORM=xcb mscore for compatibility.
+if [ "${XDG_SESSION_TYPE:-}" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    export MU_QT_QPA_PLATFORM="${MU_QT_QPA_PLATFORM:-wayland}"
+fi
+# Use an absolute path to avoid invoking this wrapper recursively.
+exec /usr/bin/mscore "$@"
