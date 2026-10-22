@@ -11,6 +11,13 @@ hl.config({
 		rounding = 12,
 		blur = {
 			passes = 2,
+			enabled = true,
+			variant = "frost",
+		},
+		wobble = {
+			enabled = true,
+			intensity = 0.2,
+			stiffness = 469,
 		},
 		motion_blur = {
 			enabled = true,
