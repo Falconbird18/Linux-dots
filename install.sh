@@ -5,14 +5,16 @@ REPO_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DRY_RUN=false
 INSTALL_KEYD=false
 INSTALL_PACKAGES=false
+INSTALL_MUSESCORE_REVERB=false
 usage() {
     cat <<'HELP'
-Usage: ./install.sh [--dry-run] [--packages] [--keyd]
+Usage: ./install.sh [--dry-run] [--packages] [--keyd] [--musescore-reverb]
 Install every entry in this checkout's .config and bundled user assets.
 Existing directories are merged; replaced entries are backed up.
   --dry-run   Preview without changing files or installing packages
   --packages Install core desktop dependencies using pacman (Arch Linux)
   --keyd     Install and enable keyd with the bundled keyboard layout
+  --musescore-reverb Install Dragonfly VST3 reverbs for MuseScore 4.6+ (Arch Linux)
   --help     Show help
 HELP
 }
@@ -21,6 +23,7 @@ for arg in "$@"; do
         --dry-run) DRY_RUN=true ;;
         --packages) INSTALL_PACKAGES=true ;;
         --keyd) INSTALL_KEYD=true ;;
+        --musescore-reverb) INSTALL_MUSESCORE_REVERB=true ;;
         --help|-h) usage; exit 0 ;;
         *) printf 'Unknown option: %s\n' "$arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -53,10 +56,65 @@ backup() {
     mv -- "$dest" "$BACKUP_DIR/$relative"
 }
 # Merge without following destination symlinks; retain unrelated live settings.
+install_musescore_settings() {
+    local src=$1 dest=$2 relative=$3 merged
+    if $DRY_RUN; then
+        printf 'Would merge MuseScore audio settings: %s\n' "$dest"
+        return
+    fi
+    merged=$(mktemp)
+    # Only the bundled [io] keys override live preferences. Keep other keys,
+    # sections, and comments, including the user's theme and recent projects.
+    if ! awk '
+        FILENAME == ARGV[1] {
+            if ($0 ~ /^[^#;[][^=]*=/) {
+                key=$0; sub(/=.*/, "", key)
+                values[key]=$0; order[++count]=key
+            }
+            next
+        }
+        /^\[/ {
+            in_io=($0 ~ /^\[io\][[:space:]]*$/)
+            print
+            if (in_io && !found++) {
+                for (i=1; i<=count; i++) print values[order[i]]
+            }
+            next
+        }
+        in_io {
+            key=$0; sub(/=.*/, "", key)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+            if (key in values && index($0, "=")) next
+        }
+        { print }
+        END {
+            if (!found) {
+                print "\n[io]"
+                for (i=1; i<=count; i++) print values[order[i]]
+            }
+        }
+    ' "$src" "$dest" > "$merged"; then
+        rm -f -- "$merged"
+        return 1
+    fi
+    if cmp -s -- "$merged" "$dest"; then
+        rm -f -- "$merged"
+        return
+    fi
+    chmod --reference="$dest" "$merged"
+    backup "$dest" "$relative"
+    cp -p -- "$merged" "$dest"
+    rm -f -- "$merged"
+    printf 'Merged MuseScore audio settings: %s\n' "$dest"
+}
 install_entry() {
     local src=$1 dest=$2 relative=$3 child
     if [[ $src -ef $dest ]]; then
         printf 'Already installed: %s\n' "$dest"
+        return
+    fi
+    if [[ $relative == config/MuseScore/MuseScore4.ini && -f $dest && ! -L $dest ]]; then
+        install_musescore_settings "$src" "$dest" "$relative"
         return
     fi
     if [[ -d $src && ! -L $src ]]; then
@@ -94,6 +152,14 @@ install_entry() {
 #         sudo pacman -S --needed "${packages[@]}"
 #     fi
 # fi
+if $INSTALL_MUSESCORE_REVERB; then
+    if $DRY_RUN; then
+        echo 'Would install MuseScore reverb package: dragonfly-reverb-vst3 (pacman).'
+    else
+        command -v pacman >/dev/null || { echo 'MuseScore reverb installation requires Arch Linux (pacman).' >&2; exit 1; }
+        sudo pacman -S --needed dragonfly-reverb-vst3
+    fi
+fi
 install_entry "$REPO_DIR/.config" "$CONFIG_HOME" config
 for name in bin share; do
     src="$REPO_DIR/.local/$name"
@@ -128,5 +194,9 @@ if ! $DRY_RUN && command -v update-desktop-database >/dev/null && [[ -d $DATA_HO
     update-desktop-database "$DATA_HOME/applications"
 fi
 [[ -z $BACKUP_DIR ]] || printf 'Backups: %s\n' "$BACKUP_DIR"
-hyprctl reload
+if $INSTALL_MUSESCORE_REVERB; then
+    echo 'MuseScore 4.6+: restart, open Mixer (F10), and select Dragonfly Hall Reverb in an Audio FX slot.'
+    echo 'For shared reverb, use an Aux channel and adjust instrument sends; save the score to retain the effect.'
+fi
+if ! $DRY_RUN && command -v hyprctl >/dev/null; then hyprctl reload; fi
 echo 'Done. Restart affected apps; log in again to pick up session environment changes.'

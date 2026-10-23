@@ -37,6 +37,7 @@ Run from this checkout as your normal user (from any working directory):
 ./install.sh              # install configs and bundled user assets
 ./install.sh --packages   # also install core desktop dependencies on Arch
 ./install.sh --keyd       # also install/enable the bundled keyd keyboard layout
+./install.sh --musescore-reverb # also install Dragonfly VST3 reverbs on Arch
 ```
 
 `install-dots.sh` is an alias for the same installer and accepts the same options.
@@ -69,6 +70,28 @@ requires `qt6-wayland` (included with `--packages`). Ensure `~/.local/bin` is in
 `PATH` for terminal launches. The app-menu entry works without this PATH change.
 If you encounter a MuseScore Wayland bug, use
 `MU_QT_QPA_PLATFORM=xcb ~/.local/bin/mscore` as a temporary fallback.
+
+The installer also sets MuseScore 4's audio driver to `ALSA` and output device
+to `pulse`, avoiding the startup freeze when reopening the default ALSA device.
+These two settings are merged into `MuseScore/MuseScore4.ini`, preserving other
+preferences and backing up the previous file when it changes. Close MuseScore
+before installing so it does not overwrite the settings on exit. On Arch this
+route requires `alsa-plugins` and a PulseAudio-compatible server such as
+`pipewire-pulse`.
+
+For a reverb effect similar to MuseFX, run `./install.sh --musescore-reverb`.
+This installs Arch's [`dragonfly-reverb-vst3`](https://archlinux.org/packages/extra/x86_64/dragonfly-reverb-vst3/)
+package using `sudo pacman -S --needed`; it can be combined with the other
+installer options, and `--dry-run` only previews the installation.
+Use MuseScore Studio 4.6 or newer for
+[Linux VST3 support](https://musescore.org/en/4.6).
+Fully quit and reopen MuseScore after installing, open the Mixer (`F10`),
+and select **Dragonfly Hall Reverb** in an **Audio FX** slot. For shared
+reverb, put it on an Aux channel and adjust each instrument's send level.
+Avoid stacking it with an existing reverb unless intended. Save the score
+to retain the effect; installing the plugin does not change existing scores
+or automatically enable it. MuseScore's built-in **Muse Reverb** is also
+available without installing an extra package.
 
 ## Sonora on Arch Linux
 
