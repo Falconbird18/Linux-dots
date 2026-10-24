@@ -12,7 +12,7 @@ Comment=Create, play and print beautiful sheet music
 Comment[ru]=Визуальный редактор нотных партитур
 Comment[fr]=Gravure de partitions musicales
 Icon=mscore
-Exec=env MU_QT_QPA_PLATFORM=wayland mscore %U
+Exec=mscore %U
 Terminal=false
 MimeType=application/x-musescore;application/x-musescore+xml;x-scheme-handler/musescore;application/vnd.recordare.musicxml;application/vnd.recordare.musicxml+xml;application/x-mei+xml;audio/midi;application/x-bww;application/x-biab;application/x-capella;audio/x-gtp;application/x-musedata;application/x-overture;audio/x-ptb;application/x-tef;application/x-sf2;application/x-sf3;
 Categories=AudioVideo;Audio;Graphics;2DGraphics;VectorGraphics;RasterGraphics;Publishing;Midi;Mixer;Sequencer;Music;Qt;

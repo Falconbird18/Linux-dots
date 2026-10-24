@@ -4,26 +4,34 @@ shopt -s dotglob nullglob
 REPO_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DRY_RUN=false
 INSTALL_KEYD=false
-INSTALL_PACKAGES=false
 INSTALL_MUSESCORE_REVERB=false
+DISPLAY_SETTINGS=
 usage() {
     cat <<'HELP'
-Usage: ./install.sh [--dry-run] [--packages] [--keyd] [--musescore-reverb]
-Install every entry in this checkout's .config and bundled user assets.
+Usage: ./install.sh [--dry-run] [--keyd] [--musescore-reverb] [--display=auto|preconfigured]
+Install this checkout's configs, launchers, and desktop entries.
 Existing directories are merged; replaced entries are backed up.
   --dry-run   Preview without changing files or installing packages
-  --packages Install core desktop dependencies using pacman (Arch Linux)
   --keyd     Install and enable keyd with the bundled keyboard layout
   --musescore-reverb Install Dragonfly VST3 reverbs for MuseScore 4.6+ (Arch Linux)
+  --display=auto          Generate portable display settings (default without a terminal)
+  --display=preconfigured Use the bundled display resolution, scaling, and HDR settings
   --help     Show help
 HELP
 }
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
-        --packages) INSTALL_PACKAGES=true ;;
         --keyd) INSTALL_KEYD=true ;;
         --musescore-reverb) INSTALL_MUSESCORE_REVERB=true ;;
+        --display=auto|--display=preconfigured)
+            selected_display=${arg#*=}
+            if [[ -n $DISPLAY_SETTINGS && $DISPLAY_SETTINGS != "$selected_display" ]]; then
+                echo 'Choose only one display settings mode.' >&2
+                exit 2
+            fi
+            DISPLAY_SETTINGS=$selected_display
+            ;;
         --help|-h) usage; exit 0 ;;
         *) printf 'Unknown option: %s\n' "$arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -32,6 +40,19 @@ if [[ $EUID == 0 && $DRY_RUN == false ]]; then
     echo 'Run as your normal user; sudo is requested only for system changes.' >&2
     exit 1
 fi
+if [[ -z $DISPLAY_SETTINGS ]]; then
+    DISPLAY_SETTINGS=auto
+    if [[ -t 0 ]]; then
+        printf 'Display settings: [1] Auto-generate for this computer (default), [2] Preconfigured laptop settings\n'
+        read -r -p 'Choose [1/2]: ' display_choice || display_choice=
+        case "$display_choice" in
+            ''|1|auto) ;;
+            2|preconfigured) DISPLAY_SETTINGS=preconfigured ;;
+            *) echo 'Invalid display settings choice.' >&2; exit 2 ;;
+        esac
+    fi
+fi
+printf 'Display settings: %s\n' "$DISPLAY_SETTINGS"
 CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 STATE_HOME=${XDG_STATE_HOME:-$HOME/.local/state}
@@ -109,6 +130,9 @@ install_musescore_settings() {
 }
 install_entry() {
     local src=$1 dest=$2 relative=$3 child
+    if [[ $relative == config/hypr/dms/outputs.lua && $DISPLAY_SETTINGS == auto ]]; then
+        src=$GENERATED_OUTPUTS
+    fi
     if [[ $src -ef $dest ]]; then
         printf 'Already installed: %s\n' "$dest"
         return
@@ -137,42 +161,70 @@ install_entry() {
         if ! $DRY_RUN; then cp -a -- "$src" "$dest"; fi
     fi
 }
-# if $INSTALL_PACKAGES || $INSTALL_KEYD; then
-#     command -v pacman >/dev/null || { echo 'Package installation requires Arch Linux (pacman).' >&2; exit 1; }
-#     packages=()
-#     if $INSTALL_PACKAGES; then
-#         packages+=(hyprland kitty fish starship qt6-wayland hyprpicker hyprlock hypridle
-#             wl-clipboard brightnessctl bluez-utils cliphist grim slurp playerctl
-#             xdg-desktop-portal-hyprland)
-#     fi
-#     if $INSTALL_KEYD; then packages+=(keyd); fi
-#     if $DRY_RUN; then
-#         printf 'Would install packages: %s\n' "${packages[*]}"
-#     else
-#         sudo pacman -S --needed "${packages[@]}"
-#     fi
-# fi
 if $INSTALL_MUSESCORE_REVERB; then
     if $DRY_RUN; then
-        echo 'Would install MuseScore reverb package: dragonfly-reverb-vst3 (pacman).'
+        echo 'Would install dragonfly-reverb-vst3 (pacman) and the official VST-enabled MuseScore build.'
     else
         command -v pacman >/dev/null || { echo 'MuseScore reverb installation requires Arch Linux (pacman).' >&2; exit 1; }
         sudo pacman -S --needed dragonfly-reverb-vst3
+        "$REPO_DIR/install-musescore.sh"
+        echo 'Registering Dragonfly Hall Reverb with official MuseScore (30 second limit)...'
+        plugin=/usr/lib/vst3/DragonflyHallReverb.vst3
+        [[ -d $plugin ]] || { echo "Missing VST3 bundle: $plugin" >&2; exit 1; }
+        if pgrep -x mscore >/dev/null || pgrep -x mscore4portable >/dev/null; then
+            echo 'Close MuseScore, then rerun with --musescore-reverb to register the effect.' >&2
+            exit 1
+        fi
+        registry=$DATA_HOME/MuseScore/MuseScore4/known_audio_plugins.json
+        if [[ -f $registry ]]; then
+            registration_backup=$(mktemp "${registry}.backup-XXXXXX")
+            cp -p -- "$registry" "$registration_backup"
+        fi
+        QT_QPA_PLATFORM=offscreen MU_QT_QPA_PLATFORM=offscreen timeout 30s \
+            "$DATA_HOME/musescore-official/current/AppRun" --register-audio-plugin "$plugin"
+        python3 - "$registry" "$plugin" <<'PY_CHECK'
+import json, sys
+with open(sys.argv[1]) as f:
+    plugins = json.load(f)
+if not any(p.get('path') == sys.argv[2] and p.get('enabled')
+           and p.get('meta', {}).get('id') == 'DragonflyHallReverb' for p in plugins):
+    sys.exit('Dragonfly Hall Reverb registration failed; inspect MuseScore audio plugin logs.')
+print('Verified: Dragonfly Hall Reverb is enabled in MuseScore.')
+PY_CHECK
+    fi
+fi
+# Keep the checkout's hardware profile intact. Generate only the installed copy.
+GENERATED_OUTPUTS=
+trap '[[ -z $GENERATED_OUTPUTS || $GENERATED_OUTPUTS == /dev/null ]] || rm -f -- "$GENERATED_OUTPUTS"' EXIT
+if [[ $DISPLAY_SETTINGS == auto ]]; then
+    if $DRY_RUN; then
+        echo 'Would generate display settings: preferred mode, automatic position and per-monitor scale; no forced HDR/VRR.'
+        # install_entry only compares/prints this source during a dry run.
+        GENERATED_OUTPUTS=/dev/null
+    else
+        GENERATED_OUTPUTS=$(mktemp)
+        cat > "$GENERATED_OUTPUTS" <<'OUTPUTS'
+-- Generated by Linux-dots install.sh --display=auto.
+-- Hyprland detects preferred modes and scaling when each display connects.
+-- Adjust displays in DMS to save a custom layout for this computer.
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
+OUTPUTS
+        chmod 644 "$GENERATED_OUTPUTS"
     fi
 fi
 install_entry "$REPO_DIR/.config" "$CONFIG_HOME" config
-for name in bin share; do
-    src="$REPO_DIR/.local/$name"
+# Only supporting scripts and desktop entries belong in the user data install.
+# Do not traverse .local/share wholesale (fonts/icons can contain many files).
+for relative in .local/bin .local/share/applications; do
+    src="$REPO_DIR/$relative"
     [[ -d $src ]] || continue
-    if [[ $name == share ]]; then dest=$DATA_HOME; else dest=$HOME/.local/bin; fi
-    install_entry "$src" "$dest" "local/$name"
+    case "$relative" in
+        .local/bin) dest=$HOME/.local/bin ;;
+        .local/share/applications) dest=$DATA_HOME/applications ;;
+    esac
+    if ! $DRY_RUN; then mkdir -p -- "$(dirname -- "$dest")"; fi
+    install_entry "$src" "$dest" "${relative#.}"
 done
-# for name in .icons .spicetify wallpapers; do
-#     [[ -d $REPO_DIR/$name ]] || continue
-#     if [[ $name == wallpapers ]]; then dest=$HOME/Pictures/wallpapers; else dest=$HOME/$name; fi
-#     if ! $DRY_RUN; then mkdir -p -- "$(dirname -- "$dest")"; fi
-#     install_entry "$REPO_DIR/$name" "$dest" "assets/$name"
-# done
 if $INSTALL_KEYD; then
     if $DRY_RUN; then
         echo 'Would back up /etc/keyd/default.conf, install the keyboard layout, and enable/reload keyd.'
@@ -191,12 +243,15 @@ if $INSTALL_KEYD; then
     fi
 fi
 if ! $DRY_RUN && command -v update-desktop-database >/dev/null && [[ -d $DATA_HOME/applications ]]; then
-    update-desktop-database "$DATA_HOME/applications"
+    echo 'Updating desktop entry database (10 second limit)...'
+    if ! timeout 10s update-desktop-database "$DATA_HOME/applications"; then
+        echo 'Desktop database update failed or timed out; configs are installed.' >&2
+    fi
 fi
 [[ -z $BACKUP_DIR ]] || printf 'Backups: %s\n' "$BACKUP_DIR"
 if $INSTALL_MUSESCORE_REVERB; then
     echo 'MuseScore 4.6+: restart, open Mixer (F10), and select Dragonfly Hall Reverb in an Audio FX slot.'
     echo 'For shared reverb, use an Aux channel and adjust instrument sends; save the score to retain the effect.'
 fi
-if ! $DRY_RUN && command -v hyprctl >/dev/null; then hyprctl reload; fi
-echo 'Done. Restart affected apps; log in again to pick up session environment changes.'
+echo 'Done. Restart affected apps; run hyprctl reload when ready to apply Hyprland changes.'
+echo 'Log in again to pick up session environment changes.'
