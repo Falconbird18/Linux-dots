@@ -1,0 +1,16 @@
+# Development applications; one Arch package per line.
+zed
+neovim
+nodejs
+pnpm
+yarn
+cmake
+doxygen
+rustup
+python-pip
+python-matplotlib
+python-scipy
+python-fastapi
+docker
+docker-compose
+godot

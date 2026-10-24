@@ -1,0 +1,27 @@
+# Desktop applications; one Arch package per line.
+kitty
+fish
+starship
+dolphin
+dolphin-plugins
+ark
+brightnessctl
+wl-clipboard
+cliphist
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+qt6-wayland
+xorg-xwayland
+grim
+slurp
+cava
+matugen
+power-profiles-daemon
+polkit-gnome
+blueman
+bluez-utils
+adw-gtk-theme
+breeze-gtk
+otf-monaspace
+otf-monaspace-nerdfonts
+noto-fonts-cjk

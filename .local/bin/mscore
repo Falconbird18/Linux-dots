@@ -1,18 +1,18 @@
 #!/usr/bin/env sh
 # Native Linux VST editors embed X11 windows. Use XWayland for the official
 # VST-enabled build; honour an explicit MU_QT_QPA_PLATFORM override.
-official="${XDG_DATA_HOME:-$HOME/.local/share}/musescore-official/current/AppRun"
+# Use the package-managed official binary (musescore-bin), with VST3 hosting.
+# Never prefer an old private AppImage over the installed package.
 if [ "${XDG_SESSION_TYPE:-}" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    if [ -x "$official" ]; then
-        export MU_QT_QPA_PLATFORM="${MU_QT_QPA_PLATFORM:-xcb}"
-        export QT_QPA_PLATFORM="$MU_QT_QPA_PLATFORM"
-        if [ "$MU_QT_QPA_PLATFORM" = xcb ]; then
-            # Paired with Hyprland force_zero_scaling: render at the focused
-            # monitor's scale. Query at launch so display changes are picked up.
-            if [ -z "${QT_SCALE_FACTOR:-}" ]; then
-                monitor_scale=
-                if command -v hyprctl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-                    monitor_scale=$(python3 - <<'PY_SCALE'
+    export MU_QT_QPA_PLATFORM="${MU_QT_QPA_PLATFORM:-xcb}"
+    export QT_QPA_PLATFORM="$MU_QT_QPA_PLATFORM"
+    if [ "$MU_QT_QPA_PLATFORM" = xcb ]; then
+        # Paired with Hyprland force_zero_scaling: render at the focused
+        # monitor's scale. Query at launch so display changes are picked up.
+        if [ -z "${QT_SCALE_FACTOR:-}" ]; then
+            monitor_scale=
+            if command -v hyprctl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+                monitor_scale=$(python3 - <<'PY_SCALE'
 import json
 import math
 import subprocess
@@ -30,18 +30,12 @@ try:
 except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError, AttributeError):
     pass
 PY_SCALE
-                    )
-                fi
-                export QT_SCALE_FACTOR="${monitor_scale:-1}"
+                )
             fi
-            export QT_FONT_DPI="${QT_FONT_DPI:-96}"
+            export QT_SCALE_FACTOR="${monitor_scale:-1}"
         fi
-    else
-        export MU_QT_QPA_PLATFORM="${MU_QT_QPA_PLATFORM:-wayland}"
+        export QT_FONT_DPI="${QT_FONT_DPI:-96}"
     fi
-fi
-if [ -x "$official" ]; then
-    exec "$official" "$@"
 fi
 # Use an absolute path to avoid invoking this wrapper recursively.
 exec /usr/bin/mscore "$@"

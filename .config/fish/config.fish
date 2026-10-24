@@ -1,3 +1,5 @@
+fish_add_path --path "$HOME/.local/bin"
+
 function fish_prompt -d "Write out the prompt"
     # This shows up as USER@HOST /home/user/ >, with the directory colored
     # $USER and $hostname are set by fish, so you can just use them
@@ -13,9 +15,6 @@ if status is-interactive
 end
 
 starship init fish | source
-if test -f ~/.cache/ags/user/generated/terminal/sequences.txt
-    cat ~/.cache/ags/user/generated/terminal/sequences.txt
-end
 
 alias pamcan=pacman
 

@@ -1,0 +1,5 @@
+# Gaming applications; one Arch package per line.
+luanti
+wine
+wine-mono
+winetricks

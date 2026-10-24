@@ -1,0 +1,7 @@
+# Everyday applications; one Arch package per line.
+firefox
+chromium
+thunderbird
+discord
+vlc
+vlc-plugins-all
