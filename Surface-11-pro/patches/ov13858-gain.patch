@@ -1,0 +1,20 @@
+--- a/drivers/media/i2c/ov13858.c
++++ b/drivers/media/i2c/ov13858.c
+@@ -65,7 +65,7 @@
+ 
+ /* Analog gain control */
+ #define OV13858_REG_ANALOG_GAIN		0x3508
+-#define OV13858_ANA_GAIN_MIN		0
++#define OV13858_ANA_GAIN_MIN		0x80	/* 1x */
+ #define OV13858_ANA_GAIN_MAX		0x1fff
+ #define OV13858_ANA_GAIN_STEP		1
+ #define OV13858_ANA_GAIN_DEFAULT	0x80
+@@ -74,7 +74,7 @@
+ #define OV13858_REG_B_MWB_GAIN		0x5100
+ #define OV13858_REG_G_MWB_GAIN		0x5102
+ #define OV13858_REG_R_MWB_GAIN		0x5104
+-#define OV13858_DGTL_GAIN_MIN		0
++#define OV13858_DGTL_GAIN_MIN		1024	/* 1x */
+ #define OV13858_DGTL_GAIN_MAX		16384	/* Max = 16 X */
+ #define OV13858_DGTL_GAIN_DEFAULT	1024	/* Default gain = 1 X */
+ #define OV13858_DGTL_GAIN_STEP		1	/* Each step = 1/1024 */

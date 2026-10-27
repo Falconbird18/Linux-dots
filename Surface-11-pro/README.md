@@ -1,0 +1,131 @@
+# Intel Surface Pro 11 cameras
+
+This folder is a self-contained installer for the Intel Surface Pro 11 for
+Business, SKU 2103, on Arch Linux or an Arch derivative using systemd-boot with
+the EFI partition mounted at `/efi`. It does not support Snapdragon models,
+other camera modules, GRUB, or other distributions. Copy the **entire folder**
+to another matching device; paths and build directories are derived locally.
+
+Run as the logged-in desktop user:
+
+```sh
+bash install-surface11.sh install
+```
+
+The first run builds Linux 7.2.9 with the local patches and installs
+`7.2.9-surface11-camera1` as a separate boot option. Reboot into that entry and
+run the same command again to install and check the cameras. The script never
+reboots automatically. It preserves the original kernel's modules and boot
+files. Keep the generated kernel source/build directory: DKMS uses it when
+building v4l2loopback for this custom kernel.
+
+The source archive is SHA-256 pinned to the digest in kernel.org's
+[signed checksum list](https://cdn.kernel.org/pub/linux/kernel/v7.x/sha256sums.asc).
+All kernel changes are local patches listed in `patches/series`. There are no
+emailed patches downloaded during the build and no best-effort source rewrites.
+Applying the series again verifies already-applied changes; unknown/partial
+changes stop the build. `SURFACE11_BUILD_DIR` and `SURFACE11_BUILD_JOBS` can set
+the build location and parallelism. The initial kernel configuration comes from
+the running kernel so the machine's existing storage/network drivers are kept.
+
+The build requires working sudo, internet access, a compiler toolchain, and
+enough disk space for a full kernel build. Use a fully upgraded Arch system;
+the installer deliberately does not perform an unattended full-system upgrade.
+Secure Boot signing/enrollment must already be configured if Secure Boot is
+enabled; this script does not manage signing keys.
+
+## Camera path
+
+Both sensors produce raw Bayer data. A kernel driver alone does not make them
+ordinary webcams. libcamera's simple pipeline performs demosaicing, automatic
+exposure, and white balance. Each relay acquires its sensor directly with
+GStreamer `libcamerasrc` through the **CPU software ISP**: on the tested machine the GPU path produced nearly uniform dark frames.
+The matched libcamera IPA sidecar provides the IMX681 analogue-gain formula;
+distro libraries are retained. No app-specific launchers or preload are needed.
+
+On-demand relays provide packed 1280×720, 30 fps YUYV with square pixels and
+limited-range BT.709 color metadata at:
+
+| Device | Name | PipeWire source |
+| --- | --- | --- |
+| `/dev/video42` or `/dev/surface-front-camera` | Surface Front Camera | `surface11-camera-front` |
+| `/dev/video43` or `/dev/surface-rear-camera` | Surface Rear Camera | `surface11-camera-rear` |
+
+The relay requests 3200×1800 from the front ISP and 1920×1080 from the rear,
+then scales to 720p with Lanczos filtering. This avoids the CPU ISP's tight
+720p center crop and averages sensor noise without stretching the image.
+The rear mounting rotation is applied to the pixels. A modest spatial median
+filter reduces noise; set `Environment=SURFACE11_CAMERA_QUALITY=detail` in a
+relay service override to disable it for comparison. The PipeWire publishers
+copy these same pixels into shared-memory buffers for portal and native clients.
+They open capture only while used and restart after a prolonged capture stall.
+The nominal 30 fps route can repeat frames if physical capture is slower.
+
+WirePlumber's libcamera monitor is disabled on this supported Surface, so capture
+runs in the camera services and apps see the processed public cameras. Its V4L2
+monitor remains enabled for other webcams, with monitor copies of video42/43
+disabled. No portal permission scripts are replaced. Camera capture does not run
+inside the audio session manager. A WirePlumber restart also restarts the relays
+and publishers.
+
+Version-sensitive parts stop rather than load an incompatible IPA. The tested
+userspace is libcamera/libcamera-ipa 0.7.2, WirePlumber 0.5.18, PipeWire 1.6.10,
+and v4l2loopback 0.15.4. The loopback source is checksum-verified and patched
+in a separate `0.15.4.surface11.1` DKMS source directory; package-owned sources
+are retained. The local patch tracks queued capture buffers, prevents the
+file-I/O producer from overwriting app-held mmap buffers, and serializes read
+copies and persists color-only format updates. The writer verifies the stored
+format with `G_FMT`, rather than trusting the `S_FMT` echo. A 16-buffer capture
+pool leaves room for normal apps to retain frames. When an app holds every mmap
+buffer, incoming frames are dropped until it returns one. This fixes the observed GStreamer unqueued-buffer failure.
+The installer replaces the indexed module for the target kernel and reloads it
+only when the two managed devices are the only loopbacks. Other users must
+release the devices before that reload can proceed.
+
+The IPA builder requires libcamera 0.7.2 and records the exact installed package
+versions. After a package upgrade, rerun the
+installer; the startup guard falls back to the distro IPA until rebuilt, which
+may degrade front-camera exposure if the distro still lacks its gain helper.
+
+## Checks and recovery
+
+```sh
+bash install-surface11.sh status
+bash setup-system-cameras.sh check
+bash install-surface11.sh quality
+bash install-surface11.sh undo-cameras
+```
+
+For `check` and `quality`, uncover both lenses and use a lit, varied scene.
+Checks capture in memory, wait for exposure warmup, reject uniform/frozen frames,
+and exercise the public cameras across reopen through concurrent PipeWire
+clients and separate V4L2 read/mmap captures. A retained-buffer hardware test
+also verifies that mapped pixels do not change until the app returns them.
+The route diagnostic connects through the ordinary PipeWire socket.
+`undo-cameras` removes the managed bridge configuration and services, retaining
+packages and kernel drivers. Reboot afterward to remove idle loopback devices.
+
+Hardware-free checks (requires the installed development dependencies):
+
+```sh
+bash tests/check-relay.sh
+dbus-run-session -- python3 tests/check-publisher.py
+bash tests/check-kernel-patches.sh "$HOME/surface-kernel-build/linux-7.2.9.tar.xz"
+```
+
+These cover packed/padded frame copies, write errors, color range conversion,
+pixel rotation, noise filtering, gain-helper math, public camera routing,
+concurrent ordinary/portal streams, idle/reopen, and patch application/repeat.
+The relay lifecycle test uses the pinned source cached by the camera installer.
+It prints SKIP if that build has not been performed yet.
+
+Color accuracy and optical lens correction are deferred. No measured color
+matrices, lens shading maps, or distortion models are installed. The quality
+command reports exposure/clipping/change metrics rather than calibration error.
+Compatibility tests cover the V4L2 and PipeWire interfaces; individual apps and a
+fresh boot still need checking on each device. Apps requiring a fixed format
+other than YUYV 720p may need format conversion.
+
+The loopback driver permits one direct V4L2 capture owner at a time. Concurrent
+apps should use PipeWire; a direct V4L2 app can make the PipeWire capture busy
+until it releases the device, just as with an exclusive physical camera.

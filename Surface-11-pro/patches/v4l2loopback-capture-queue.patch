@@ -1,0 +1,159 @@
+--- a/v4l2loopback.c
++++ b/v4l2loopback.c
+@@ -332,6 +332,10 @@
+ };
+ 
+ struct v4l2_loopback_device {
++	/* Capture ownership is exclusive in 0.15.4. Keep mmap buffers held by
++	 * that owner out of the file-I/O producer until QBUF returns them. */
++	unsigned long capture_queued;
++	bool capture_mmap;
+ 	struct v4l2_device v4l2_dev;
+ 	struct v4l2_ctrl_handler ctrl_handler;
+ 	struct video_device *vdev;
+@@ -1166,6 +1170,13 @@
+ 		dev->pix_format_has_valid_sizeimage =
+ 			v4l2l_pix_format_has_valid_sizeimage(f);
+ 	}
++	/* A color-only update does not change buffer layout. Preserve it even
++	 * when pix_format_eq(..., 0) reports matching width/height/fourcc. */
++	dev->pix_format.colorspace = f->fmt.pix.colorspace;
++	dev->pix_format.ycbcr_enc = f->fmt.pix.ycbcr_enc;
++	dev->pix_format.quantization = f->fmt.pix.quantization;
++	dev->pix_format.xfer_func = f->fmt.pix.xfer_func;
++	dev->pix_format.priv = f->fmt.pix.priv;
+ 	acquire_token(dev, opener, format, token);
+ 	if (opener->io_method == V4L2L_IO_TIMEOUT)
+ 		dev->timeout_image_io = 0;
+@@ -1876,6 +1887,7 @@
+ 
+ 	switch (type) {
+ 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
++		set_bit(index, &dev->capture_queued);
+ 		dprintkrw("QBUF(CAPTURE, index=%u) -> " BUFFER_DEBUG_FMT_STR,
+ 			  index, BUFFER_DEBUG_FMT_ARGS(buf));
+ 		set_queued(buf->flags);
+@@ -1947,12 +1959,14 @@
+ 	int pos, timeout_happened;
+ 	u32 index;
+ 
++retry:
+ 	if ((file->f_flags & O_NONBLOCK) &&
+ 	    (dev->write_position <= opener->read_position &&
+ 	     dev->reread_count <= opener->reread_count &&
+ 	     !dev->timeout_happened))
+ 		return -EAGAIN;
+-	wait_event_interruptible(dev->read_event, can_read(dev, opener));
++	if (wait_event_interruptible(dev->read_event, can_read(dev, opener)))
++		return -ERESTARTSYS;
+ 
+ 	mutex_lock(&dev->image_mutex);
+ 	if (!dev->image || dev->used_buffer_count == 0) {
+@@ -1979,6 +1993,15 @@
+ 	timeout_happened = dev->timeout_happened && (dev->timeout_jiffies > 0);
+ 	dev->timeout_happened = 0;
+ 	index = dev->bufpos2index[pos];
++	if (opener->io_method == V4L2L_IO_MMAP &&
++	    !test_and_clear_bit(index, &dev->capture_queued)) {
++		/* Never dequeue a buffer still owned by the application. */
++		spin_unlock_bh(&dev->lock);
++		mutex_unlock(&dev->image_mutex);
++		if (signal_pending(current))
++			return -ERESTARTSYS;
++		goto retry;
++	}
+ 	if (timeout_happened)
+ 		get_buffer(&dev->buffers[index]);
+ 
+@@ -2076,6 +2099,8 @@
+ 			return -EIO;
+ 		if (dev->stream_tokens & token) {
+ 			acquire_token(dev, opener, stream, token);
++			WRITE_ONCE(dev->capture_mmap,
++				   opener->io_method == V4L2L_IO_MMAP);
+ 			client_usage_queue_event(dev->vdev);
+ 		}
+ 		return 0;
+@@ -2119,6 +2144,8 @@
+ 			prepare_buffer_queue(dev, dev->used_buffer_count);
+ 		return 0;
+ 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
++		WRITE_ONCE(dev->capture_mmap, false);
++		WRITE_ONCE(dev->capture_queued, 0);
+ 		if (opener->stream_token & token) {
+ 			release_token(dev, opener, stream);
+ 			client_usage_queue_event(dev->vdev);
+@@ -2448,11 +2475,11 @@
+ 	result = vidioc_reqbufs(file, fh, &reqbuf);
+ 	if (result < 0)
+ 		return result;
++	/* Set the actual method before STREAMON decides mmap ownership. */
++	opener->io_method = V4L2L_IO_FILE;
+ 	result = vidioc_streamon(file, fh, type);
+ 	if (result < 0)
+ 		return result;
+-
+-	opener->io_method = V4L2L_IO_FILE;
+ 	return 0;
+ }
+ 
+@@ -2479,7 +2506,6 @@
+ 		return -EINVAL;
+ 	}
+ 	get_buffer(&dev->buffers[index]);
+-	mutex_unlock(&dev->image_mutex);
+ 
+ 	b = &dev->buffers[index].buffer;
+ 	if (count > b->bytesused)
+@@ -2489,9 +2515,11 @@
+ 			 count)) {
+ 		printk(KERN_ERR "v4l2-loopback read() failed copy_to_user()\n");
+ 		put_buffer(&dev->buffers[index]);
++		mutex_unlock(&dev->image_mutex);
+ 		return -EFAULT;
+ 	}
+ 	put_buffer(&dev->buffers[index]);
++	mutex_unlock(&dev->image_mutex);
+ 	return count;
+ }
+ 
+@@ -2517,8 +2545,22 @@
+ 		return -EINVAL;
+ 	}
+ 	index = v4l2l_mod64(dev->write_position, dev->used_buffer_count);
++	if (READ_ONCE(dev->capture_mmap)) {
++		unsigned int n;
++
++		for (n = 0; n < dev->used_buffer_count; n++) {
++			index = v4l2l_mod64(dev->write_position + n,
++					   dev->used_buffer_count);
++			if (test_bit(index, &dev->capture_queued))
++				break;
++		}
++		if (n == dev->used_buffer_count) {
++			/* A slow consumer holds every buffer: drop this input frame. */
++			mutex_unlock(&dev->image_mutex);
++			return count;
++		}
++	}
+ 	get_buffer(&dev->buffers[index]);
+-	mutex_unlock(&dev->image_mutex);
+ 
+ 	b = &dev->buffers[index].buffer;
+ 	if (copy_from_user((void *)(dev->image + b->m.offset), (void *)buf,
+@@ -2526,6 +2568,7 @@
+ 		printk(KERN_ERR
+ 		       "v4l2-loopback write() failed copy_from_user()\n");
+ 		put_buffer(&dev->buffers[index]);
++		mutex_unlock(&dev->image_mutex);
+ 		return -EFAULT;
+ 	}
+ 	put_buffer(&dev->buffers[index]);
+@@ -2534,6 +2577,7 @@
+ 	v4l2l_get_timestamp(b);
+ 	b->sequence = dev->write_position;
+ 	set_queued(b->flags);
++	mutex_unlock(&dev->image_mutex);
+ 	buffer_written(dev, &dev->buffers[index]);
+ 	set_done(b->flags);
+ 	wake_up_all(&dev->read_event);

@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Test camera visibility using an isolated PipeWire/WirePlumber instance."""
+"""Test the public publisher and stock portal policy on an isolated server."""
 import json
 import hashlib
-import importlib.util
 import shlex
 import sys
 sys.dont_write_bytecode = True
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-BACKEND = 'libcamera_input.__SB_.PC00.I2C5.CAMF'
 PUBLIC = 'surface11-camera-front'
 
 
@@ -62,16 +61,10 @@ wireplumber.profiles = { main = {
 } }
 '''
         (directory / 'conf/wireplumber.conf').write_text(config)
-        (scripts / 'surface11-camera-policy.lua').write_text(
-            (ROOT / 'wireplumber/surface11-camera-policy.lua').read_text())
-        # Use the real stock portal permission manager, including its Camera
-        # interest. The libcamera SPA node advertises Camera despite monitor
-        # rules requesting SurfaceBackend; the old fixture missed this.
+        # Exercise the installed stock portal permission manager with a fixture
+        # client selected as portal-managed. No deployed script is overridden.
         stock = Path('/usr/share/wireplumber/scripts/client/find-portal-access.lua').read_text()
-        spec = importlib.util.spec_from_file_location('portal_override', ROOT / 'prepare-camera-portal.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        portal = stock if '--unpatched' in sys.argv else module.prepare(stock)
+        portal = stock
         portal += '''
 SimpleEventHook {
   name = "test/select-portal",
@@ -98,27 +91,36 @@ SimpleEventHook {
              'gstreamer-app-1.0', 'gstreamer-video-1.0'], text=True))
         subprocess.run(['cc', '-Wall', '-Wextra', '-O2',
                         str(ROOT / 'surface-camera-publisher.c'), '-o', str(publisher), *flags], check=True)
+        remote = 'surface11-test'
+        # A unique socket and runtime directory prevent fallback to the desktop
+        # server, even if an inherited manager remote or config prefers it.
+        config = (directory / 'conf/wireplumber.conf').read_text()
+        (directory / 'conf/wireplumber.conf').write_text(
+            config + '\ncontext.properties = { remote.name = "' + remote + '" }\n')
         env = dict(os.environ, PIPEWIRE_RUNTIME_DIR=temporary,
+                   XDG_RUNTIME_DIR=temporary, PIPEWIRE_REMOTE=remote,
                    WIREPLUMBER_CONFIG_DIR=str(directory / 'conf'),
                    WIREPLUMBER_DATA_DIR=f'{directory}/data:/usr/share/wireplumber')
+        daemon_config = re.sub(r'core.name\s*=\s*pipewire-0\b',
+                               'core.name = ' + remote,
+                               Path('/usr/share/pipewire/pipewire.conf').read_text())
+        (directory / 'pipewire.conf').write_text(daemon_config)
         processes = []
+        logs = []
 
         def start(command):
-            process = subprocess.Popen(command, env=env,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            path = directory / f'process-{len(processes)}.log'
+            logs.append(path)
+            with path.open('w') as log:
+                process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
             processes.append(process)
             return process
 
         try:
-            start(['pipewire'])
+            start(['pipewire', '-c', str(directory / 'pipewire.conf')])
             time.sleep(0.3)
             start(['wireplumber'])
             time.sleep(0.8)
-            for name, role in [(BACKEND, 'Camera')]:
-                start(['gst-launch-1.0', '-q', 'videotestsrc', 'is-live=true', '!',
-                       'video/x-raw,width=640,height=480,framerate=30/1', '!',
-                       'pipewiresink', 'mode=provide',
-                       f'stream-properties=props,node.name={name},media.class=Video/Source,media.role={role}'])
             publisher_log = directory / 'publisher.log'
             with publisher_log.open('w') as log:
                 public_process = subprocess.Popen([str(publisher), 'front', '--test-source'],
@@ -127,7 +129,6 @@ SimpleEventHook {
             time.sleep(0.6)
             assert 'capture active' not in publisher_log.read_text(), 'Idle publisher started physical capture'
             nodes = monitor_graph(env)
-            assert BACKEND not in nodes, 'Native backend is visible to apps'
             assert PUBLIC in nodes, 'Public webcam was accidentally hidden'
             inspect = subprocess.Popen([str(inspector), 'surface11-test-portal'], env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -144,15 +145,6 @@ SimpleEventHook {
                     visible[line.split()[0]] = line
             graph = '\n'.join(visible.values())
             assert PUBLIC in graph, f'Portal client lost public camera: {error}'
-            assert BACKEND not in graph, 'Portal client can still bypass the shared camera'
-            for reopen in range(3):
-                subprocess.run([
-                    'timeout', '5s', 'gst-launch-1.0', '-q', 'pipewiresrc',
-                    'client-properties=props,application.name=surface11-camera-relay',
-                    'stream-properties=props,node.dont-fallback=true',
-                    f'target-object={BACKEND}', 'num-buffers=3', '!',
-                    'video/x-raw,format=RGBx,width=640,height=480', '!', 'fakesink',
-                ], env=env, check=True)
             # Match a portal consumer and an ordinary consumer concurrently.
             # Both must receive actual frames through the real MemFd publisher.
             consumers = []
@@ -161,7 +153,7 @@ SimpleEventHook {
                     'gst-launch-1.0', '-q', 'pipewiresrc',
                     f'client-properties=props,application.name={app}',
                     f'target-object={PUBLIC}', 'num-buffers=45', '!',
-                    'video/x-raw,format=YUY2,width=640,height=480', '!',
+                    'video/x-raw,format=YUY2,width=1280,height=720', '!',
                     'videoconvert', '!', 'video/x-raw,format=RGBx', '!', 'fakesink',
                 ], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
             try:
@@ -179,26 +171,31 @@ SimpleEventHook {
             # Reopen after idle; the source must be restartable.
             subprocess.run(['timeout', '8s', 'gst-launch-1.0', '-q', 'pipewiresrc',
                             f'target-object={PUBLIC}', 'num-buffers=15', '!',
-                            'video/x-raw,format=YUY2,width=640,height=480', '!', 'fakesink'],
+                            'video/x-raw,format=YUY2,width=1280,height=720', '!', 'fakesink'],
                            env=env, check=True)
             # Probe/disconnect bursts mimic PipeWire STREAM/PAUSE/STREAM churn
             # without an idle grace interval between clients.
             for restart in range(6):
                 subprocess.run(['timeout', '5s', 'gst-launch-1.0', '-q', 'pipewiresrc',
                                 f'target-object={PUBLIC}', 'num-buffers=1', '!',
-                                'video/x-raw,format=YUY2,width=640,height=480', '!', 'fakesink'],
+                                'video/x-raw,format=YUY2,width=1280,height=720', '!', 'fakesink'],
                                env=env, check=True)
                 assert public_process.poll() is None, publisher_log.read_text()
             raw = subprocess.check_output(['timeout', '8s', 'gst-launch-1.0', '-q',
                 'pipewiresrc', f'target-object={PUBLIC}', 'num-buffers=30', '!',
-                'video/x-raw,format=YUY2,width=640,height=480', '!', 'fdsink', 'fd=1'], env=env)
-            frame_size = 640 * 480 * 2
+                'video/x-raw,format=YUY2,width=1280,height=720', '!', 'fdsink', 'fd=1'], env=env)
+            frame_size = 1280 * 720 * 2
             assert len(raw) == frame_size * 30, 'Incomplete shared-memory frames'
             frames = [raw[i:i + frame_size] for i in range(0, len(raw), frame_size)]
             assert len({hashlib.sha256(f).digest() for f in frames[15:]}) >= 3, 'Publisher froze or emitted placeholders'
             print('PASS: shared-memory publisher delivers concurrent portal/ordinary streams, idles, survives rapid probes and reopens')
-            print('PASS: ordinary and portal-managed apps see only public webcams; relay receives Camera-role native frames')
+            print('PASS: stock portal permissions and ordinary clients can consume the public camera')
         finally:
+            if sys.exc_info()[0]:
+                for path in logs:
+                    print(path.name + ': ' + path.read_text()[-2000:], file=sys.stderr)
+                if (directory / 'publisher.log').exists():
+                    print((directory / 'publisher.log').read_text()[-2000:], file=sys.stderr)
             for process in reversed(processes):
                 process.terminate()
                 try:

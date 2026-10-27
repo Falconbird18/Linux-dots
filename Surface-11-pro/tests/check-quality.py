@@ -19,14 +19,17 @@ quality = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(quality)
 
 
-def process(profile, camera, pixels, fmt='I420', color='bt601'):
+def process(profile, camera, pixels, fmt='I420', color='bt709', orientation=True):
     descriptions = subprocess.check_output(
         ['bash', str(ROOT / 'surface-camera-relay.sh'), camera, '--describe'],
         env={**os.environ, 'SURFACE11_CAMERA_QUALITY': profile}, text=True).splitlines()
     processing = descriptions[0].split(' ! ', 1)[1]
+    if not orientation:
+        processing = processing.replace('method=rotate-180', 'method=none')
     pipeline = Gst.parse_launch(
-        f'appsrc name=test format=time caps="video/x-raw,format={fmt},width=640,'
-        f'height=480,framerate=30/1,colorimetry={color}" ! {processing} ! '
+        f'appsrc name=test format=time caps="video/x-raw,format={fmt},width=1280,'
+        f'height=720,framerate=30/1,colorimetry={color}" ! videoscale ! '
+        f'{processing} ! '
         'appsink name=result sync=false')
     try:
         pipeline.set_state(Gst.State.PLAYING)
@@ -41,10 +44,10 @@ def process(profile, camera, pixels, fmt='I420', color='bt601'):
         if sample is None:
             message = pipeline.get_bus().pop_filtered(Gst.MessageType.ERROR)
             raise AssertionError(message.parse_error() if message else 'Synthetic chain timed out')
-        assert sample.get_caps().get_structure(0).get_string('colorimetry') == 'bt601'
+        assert sample.get_caps().get_structure(0).get_string('colorimetry') == 'bt709'
         buffer = sample.get_buffer()
         output = buffer.extract_dup(0, buffer.get_size())
-        assert len(output) == 640 * 480 * 2
+        assert len(output) == 1280 * 720 * 2
         return output
     finally:
         pipeline.set_state(Gst.State.NULL)
@@ -52,18 +55,25 @@ def process(profile, camera, pixels, fmt='I420', color='bt601'):
 
 rng = random.Random(41)
 y = bytes(110 + rng.choice([-30, 30]) if rng.random() < 0.1 else 110
-          for _ in range(640 * 480))
-raw = y + bytes([128]) * (640 * 480 // 2)
+          for _ in range(1280 * 720))
+raw = y + bytes([128]) * (1280 * 720 // 2)
 detail = process('detail', 'front', raw)[::2]
 balanced = process('balanced', 'front', raw)[::2]
 # A spatial filter must materially reduce seeded noise, without changing exposure.
 assert statistics.pvariance(balanced) < statistics.pvariance(detail) * 0.35
 assert abs(statistics.fmean(balanced) - statistics.fmean(detail)) < 1
+# An asymmetric scene must rotate in the pixels, not just in camera metadata.
+scene = bytes(50 if col < 400 and row < 250 else 180
+              for row in range(720) for col in range(1280))
+scene += bytes([128]) * (1280 * 720 // 2)
+front = process('detail', 'rear', scene, orientation=False)[::2]
+rear = process('detail', 'rear', scene)[::2]
+assert rear == front[::-1], 'Rear pixels must be rotated by 180 degrees'
 # Check RGB -> video range conversion, including the exact rear rotation chain.
 for profile in ['balanced', 'detail']:
     for camera in ['front', 'rear']:
-        black = process(profile, camera, bytes(640 * 480 * 3), 'RGB', 'sRGB')[::2]
-        white = process(profile, camera, bytes([255]) * (640 * 480 * 3), 'RGB', 'sRGB')[::2]
+        black = process(profile, camera, bytes(1280 * 720 * 3), 'RGB', 'sRGB')[::2]
+        white = process(profile, camera, bytes([255]) * (1280 * 720 * 3), 'RGB', 'sRGB')[::2]
         assert max(abs(v - 16) for v in black) <= 1
         assert max(abs(v - 235) for v in white) <= 1
 # The diagnostic must distinguish startup convergence from settled variation.

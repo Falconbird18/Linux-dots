@@ -22,4 +22,3 @@ python3 "$ROOT/tests/check-quality.py"
 
 python3 "$ROOT/tests/check-ipa-env.py"
 
-python3 "$ROOT/tests/check-relay-lifecycle.py"

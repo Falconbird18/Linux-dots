@@ -1,4 +1,3 @@
-diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
 @@ -61,6 +61,7 @@

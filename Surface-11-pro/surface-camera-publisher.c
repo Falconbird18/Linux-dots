@@ -11,8 +11,8 @@
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
-#define WIDTH 640
-#define HEIGHT 480
+#define WIDTH 1280
+#define HEIGHT 720
 #define STRIDE (WIDTH * 2)
 #define FRAME_SIZE (STRIDE * HEIGHT)
 struct publisher {
@@ -27,6 +27,7 @@ struct publisher {
   bool active;
   bool pending;
   gint64 start_after;
+  gint64 last_frame_at;
   char *description;
 };
 static void stop_input(struct publisher *p) {
@@ -57,6 +58,7 @@ static bool start_input(struct publisher *p) {
     fail(p, "Cannot open shared V4L2 capture"); return false;
   }
   p->active = true;
+  p->last_frame_at = g_get_monotonic_time();
   fprintf(stderr, "Surface publisher: capture active\n");
   return true;
 }
@@ -64,6 +66,7 @@ static void process(void *userdata) {
   struct publisher *p = userdata;
   GstSample *sample = p->sink ? gst_app_sink_try_pull_sample(p->sink, 0) : NULL;
   if (sample) {
+    p->last_frame_at = g_get_monotonic_time();
     GstVideoInfo info;
     GstVideoFrame frame;
     if (!gst_video_info_from_caps(&info, gst_sample_get_caps(sample)) ||
@@ -106,6 +109,10 @@ static void tick(void *userdata, uint64_t expirations) {
   struct publisher *p = userdata;
   (void) expirations;
   if (p->pending && g_get_monotonic_time() >= p->start_after && !start_input(p)) return;
+  if (p->active && g_get_monotonic_time() - p->last_frame_at > 15000000) {
+    fail(p, "No capture frames for 15 seconds; restarting instead of repeating a stale image");
+    return;
+  }
   GstMessage *msg = NULL;
   if (p->input) {
     GstBus *bus = gst_element_get_bus(p->input);
@@ -179,7 +186,7 @@ int main(int argc, char **argv) {
   struct publisher p = { 0 };
   p.loop = pw_main_loop_new(NULL);
   p.pixels = g_malloc0(FRAME_SIZE);
-  p.description = g_strdup_printf("%s ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,pixel-aspect-ratio=1/1,colorimetry=bt601 ! appsink name=frames max-buffers=2 drop=true sync=false enable-last-sample=false",
+  p.description = g_strdup_printf("%s ! video/x-raw,format=YUY2,width=1280,height=720,framerate=30/1,pixel-aspect-ratio=1/1,colorimetry=bt709 ! appsink name=frames max-buffers=2 drop=true sync=false enable-last-sample=false",
       argc == 3 ? "videotestsrc is-live=true pattern=ball" :
       (front ? "v4l2src device=/dev/video42 io-mode=rw" : "v4l2src device=/dev/video43 io-mode=rw"));
   struct pw_properties *props = pw_properties_new(
@@ -192,8 +199,8 @@ int main(int argc, char **argv) {
   p.stream = pw_stream_new_simple(pw_main_loop_get_loop(p.loop), "Surface shared webcam", props, &events, &p);
   struct spa_video_info_raw format = { .format = SPA_VIDEO_FORMAT_YUY2,
       .size = SPA_RECTANGLE(WIDTH, HEIGHT), .framerate = SPA_FRACTION(30, 1),
-      .color_range = SPA_VIDEO_COLOR_RANGE_16_235, .color_matrix = SPA_VIDEO_COLOR_MATRIX_BT601,
-      .transfer_function = SPA_VIDEO_TRANSFER_BT709, .color_primaries = SPA_VIDEO_COLOR_PRIMARIES_SMPTE170M };
+      .color_range = SPA_VIDEO_COLOR_RANGE_16_235, .color_matrix = SPA_VIDEO_COLOR_MATRIX_BT709,
+      .transfer_function = SPA_VIDEO_TRANSFER_BT709, .color_primaries = SPA_VIDEO_COLOR_PRIMARIES_BT709 };
   unsigned char storage[512]; struct spa_pod_builder b = SPA_POD_BUILDER_INIT(storage, sizeof(storage));
   const struct spa_pod *param = spa_format_video_raw_build(&b, SPA_PARAM_EnumFormat, &format);
   if (pw_stream_connect(p.stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,

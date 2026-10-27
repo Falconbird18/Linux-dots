@@ -1,0 +1,8 @@
+soundwire-surface11.patch
+int3472-power1.patch
+ov13858-power.patch
+ipu-bridge.patch
+Kconfig.patch
+Makefile.patch
+imx681.patch
+ov13858-gain.patch

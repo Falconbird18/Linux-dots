@@ -32,12 +32,12 @@ sku=$(cat /sys/class/dmi/id/product_sku)
   fail "Unsupported hardware: $vendor / $sku. Model-specific patches will not be applied."
 command -v pacman >/dev/null || fail 'This installer currently supports Arch-based distributions only.'
 command -v systemctl >/dev/null || fail 'systemd is required.'
-for helper in build-linux-kernel.sh apply-imx681-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py check-camera-quality.py prepare-camera-portal.py build-imx681-ipa.sh surface-camera-ipa-env.sh surface-camera-publisher.c reprobe-front-sensor.sh patch-relay-lifecycle.py check-shared-camera.py loopback-writer.h; do
+for helper in build-linux-kernel.sh apply-kernel-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py check-camera-quality.py build-imx681-ipa.sh surface-camera-ipa-env.sh surface-camera-publisher.c reprobe-front-sensor.sh surface-camera-relay.c check-shared-camera.py loopback-writer.h tests/check-v4l2-buffers.c patches/v4l2loopback-capture-queue.patch; do
   [[ -f $SCRIPT_DIR/$helper ]] || fail "Missing $helper; keep the entire installer folder together."
 done
-for patch in imx681.patch Kconfig.patch Makefile.patch; do
+while IFS= read -r patch; do
   [[ -s $SCRIPT_DIR/patches/$patch ]] || fail "Missing patches/$patch; keep the entire installer folder together."
-done
+done < "$SCRIPT_DIR/patches/series"
 # The build script is the single source of the kernel version and suffix.
 version= suffix=
 while IFS= read -r line; do
@@ -59,7 +59,7 @@ case "$mode" in
         echo "/dev/video$number: $(cat "/sys/class/video4linux/video$number/name")"
       fi
     done
-    systemctl --user --no-pager status surface11-camera-front.service surface11-camera-rear.service || true
+    systemctl --user --no-pager status surface11-cameras.service || true
     ;;
   quality) bash "$SCRIPT_DIR/setup-system-cameras.sh" quality ;;
   undo-cameras) bash "$SCRIPT_DIR/setup-system-cameras.sh" undo ;;
@@ -67,11 +67,11 @@ case "$mode" in
     if [[ $mode == kernel || ( $mode == install && $running != "$target" ) ]]; then
       [[ $running != "$target" ]] || fail 'Boot another kernel before rebuilding the same release.'
       mountpoint -q /efi || fail 'Mount your systemd-boot EFI partition at /efi before building.'
-      [[ -d /efi/loader ]] || fail 'The current installer requires systemd-boot at /efi.'
+      sudo test -d /efi/loader || fail 'The current installer requires systemd-boot at /efi.'
       sudo pacman -S --needed linux-firmware sof-firmware alsa-ucm-conf alsa-utils
       bash "$SCRIPT_DIR/build-linux-kernel.sh"
       echo
-      echo "Kernel installed. Reboot and select Linux Surface11 Custom ($target)."
+      echo "Kernel installed. Reboot and select Linux Surface11 Cameras ($target)."
       printf 'Then run the SAME installer again: bash %q install\n' "$SCRIPT_DIR/install-surface11.sh"
       echo 'Camera compatibility setup is still pending until after that reboot.'
       exit 0

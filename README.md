@@ -44,6 +44,8 @@ Shared setup never builds a kernel. Run
 `Surface-11-pro/install-surface11.sh` separately **only on the supported Intel
 Surface Pro 11 for Business** for its kernel and cameras. Follow its reboot
 instructions and rerun it to complete camera setup.
+See [the Surface camera setup notes](Surface-11-pro/README.md) for prerequisites,
+reproducibility, checks, and calibration limitations.
 
 ### Default apps
 
