@@ -165,12 +165,20 @@ as `hyprland.lua.before-surface11-rotation`. Run the installer again after repla
 that configuration with a fresh dotfiles copy. No camera-specific kernel is needed
 for rotation; the running kernel must expose the accelerometer to IIO.
 
-The daemon consumes sensor events rather than repeatedly starting sensor commands.
-It requires a two-second stable orientation and enforces a four-second cooldown
-between rotations, so brief movements while reclining do not flip the screen.
-SensorProxy supplies orientation categories rather than raw tilt angles, so a
-sustained unintended tilt can still rotate it; use the rotation lock below when
-working in a position where you want the screen to stay fixed.
+The daemon uses SensorProxy's orientation labels together with raw IIO gravity
+readings sampled in a background thread (up to about six times per second). A rotation requires **at least 25°
+of physical tilt from the position recorded at startup or the last successful
+screen rotation**, continuously for two seconds, with a four-second cooldown.
+Small movements do not move that reference, and falling below 25° cancels the
+pending hold. Unlocking, resume and sensor recovery establish a new reference.
+This angle is measured between gravity vectors, not against the bed or a camera:
+rotation around gravity while the Surface is nearly flat may intentionally leave
+the screen unchanged. The label must also indicate a different screen orientation;
+25° of movement alone does not force a 90° screen turn.
+Missing, ambiguous, stale (older than 1.5 seconds), or invalid raw accelerometer
+readings keep the screen fixed
+and produce a journal message; the script never falls back to sensitive label-only
+rotation. Readings with acceleration far from gravity are rejected.
 Duplicate readings cause no display update. It changes only the internal `eDP-*`
 panel's transform, preserving resolution, refresh rate, scale, position, HDR and
 VRR. Touchscreen and pen input receive the same transform and are bound to that
@@ -179,8 +187,8 @@ external touchscreen or drawing tablet, configure its output/transform explicitl
 with a per-device Hyprland rule. Existing per-device overrides for the Surface's
 own digitizers must also be removed or updated to allow these defaults to apply.
 Disabled or sleeping panels are skipped. Sensor process failures are retried, and
-panel transform changes from a configuration reload are corrected within three
-seconds. The service restarts on failures and prevents duplicate daemon instances.
+panel transforms are checked before applying a rotation, avoiding redundant
+display updates. The service restarts on failures and prevents duplicate daemon instances.
 Hyprland performs the display transition; this does not add an animated rotation
 or guarantee a flicker-free modeset on every driver.
 
@@ -211,7 +219,7 @@ python3 -m unittest discover -s tests -p 'test_autorotate.py'
 ```
 
 On the Surface, run `monitor-sensor --accel` to verify all four orientations,
-then check each corner with touch and pen in each orientation. Check rapid
+then check each corner with touch and pen in each orientation. Check movements below and above 25°, rapid
 back-and-forth tilts, lock/unlock, suspend/resume, a Hyprland reload, a new login,
 and an external monitor. Software tests cannot verify physical sensor mounting,
 digitizer calibration, or the driver's modeset smoothness.

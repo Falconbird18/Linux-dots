@@ -1,5 +1,7 @@
 """Run with python3 -m unittest discover -s Surface-11-pro/tests -p 'test_autorotate.py'."""
 import importlib.util
+import math
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -7,6 +9,72 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('autorotate', Path(__file__).resolve().parents[1] / 'input/surface11-autorotate.py')
 rotation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rotation)
+
+
+class AngleTests(unittest.TestCase):
+    @staticmethod
+    def vector(degrees):
+        radians = math.radians(degrees)
+        return (9.80665 * math.sin(radians), -9.80665 * math.cos(radians), 0)
+
+    def test_startup_latches_without_rotating(self):
+        gate = rotation.AngleGate()
+        self.assertFalse(gate.allows(self.vector(40)))
+        self.assertFalse(gate.allows(self.vector(64.9)))
+        self.assertTrue(gate.allows(self.vector(65)))
+
+    def test_threshold_both_directions_and_no_reference_drift(self):
+        gate = rotation.AngleGate()
+        gate.reset(self.vector(0))
+        for angle in (1, 10, 20, 24.99, -24.99, 0):
+            self.assertFalse(gate.allows(self.vector(angle)))
+        for angle in (25, -25, 90, 180):
+            self.assertTrue(gate.allows(self.vector(angle)))
+
+    def test_rotation_resets_reference(self):
+        gate = rotation.AngleGate()
+        gate.reset(self.vector(70))
+        self.assertFalse(gate.allows(self.vector(80)))
+        self.assertFalse(gate.allows(self.vector(50)))
+        self.assertTrue(gate.allows(self.vector(45)))
+
+    def test_dropping_below_threshold_cancels_hold(self):
+        gate, debounce = rotation.AngleGate(), rotation.Debounce()
+        gate.reset(self.vector(0))
+        for now, angle in ((0, 30), (1.9, 20), (2, 30)):
+            debounce.feed(1 if gate.allows(self.vector(angle)) else None, now)
+        self.assertFalse(debounce.ready(3.9))
+        self.assertTrue(debounce.ready(4.1))
+
+    def test_axis_mounting_does_not_change_angle(self):
+        a, b = self.vector(0), self.vector(24)
+        for transform in (lambda v: v, lambda v: (-v[2], v[0], -v[1])):
+            gate = rotation.AngleGate()
+            gate.reset(transform(a))
+            self.assertFalse(gate.allows(transform(b)))
+            self.assertTrue(gate.allows(transform(self.vector(26))))
+
+    def test_scaled_raw_values_and_invalid_samples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / 'iio:device7'
+            device.mkdir()
+            for axis, raw in zip('xyz', (0, -1000, 0)):
+                (device / f'in_accel_{axis}_raw').write_text(str(raw))
+            (device / 'in_accel_scale').write_text('0.00980665')
+            (device / 'in_accel_offset').write_text('0')
+            sensor = rotation.Accelerometer(Path(tmp))
+            self.assertAlmostEqual(sensor.read()[1], -9.80665)
+            (device / 'in_accel_y_raw').write_text('0')
+            with self.assertRaises(RuntimeError):
+                sensor.read()
+            (device / 'in_accel_y_raw').write_text('nan')
+            with self.assertRaises(RuntimeError):
+                sensor.read()
+
+    def test_missing_sensor_does_not_fall_back_to_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                rotation.Accelerometer(Path(tmp))
 
 
 class RotationTests(unittest.TestCase):
