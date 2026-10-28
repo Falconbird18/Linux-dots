@@ -90,7 +90,7 @@ SimpleEventHook {
             ['pkg-config', '--cflags', '--libs', 'libpipewire-0.3',
              'gstreamer-app-1.0', 'gstreamer-video-1.0'], text=True))
         subprocess.run(['cc', '-Wall', '-Wextra', '-O2',
-                        str(ROOT / 'surface-camera-publisher.c'), '-o', str(publisher), *flags], check=True)
+                        str(ROOT / 'camera/surface-camera-publisher.c'), '-o', str(publisher), *flags], check=True)
         remote = 'surface11-test'
         # A unique socket and runtime directory prevent fallback to the desktop
         # server, even if an inherited manager remote or config prefers it.

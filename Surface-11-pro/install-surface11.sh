@@ -34,7 +34,7 @@ sku=$(cat /sys/class/dmi/id/product_sku)
   fail "Unsupported hardware: $vendor / $sku. Model-specific patches will not be applied."
 command -v pacman >/dev/null || fail 'This installer currently supports Arch-based distributions only.'
 command -v systemctl >/dev/null || fail 'systemd is required.'
-for helper in setup-touch.sh surface11-touch.py touch.lua setup-autorotation.sh surface11-autorotate.py build-linux-kernel.sh apply-kernel-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py check-camera-quality.py build-imx681-ipa.sh surface-camera-ipa-env.sh surface-camera-publisher.c reprobe-front-sensor.sh surface-camera-relay.c check-shared-camera.py loopback-writer.h tests/check-v4l2-buffers.c patches/v4l2loopback-capture-queue.patch; do
+for helper in input/setup-touch.sh input/surface11-touch.py input/touch.lua input/setup-autorotation.sh input/surface11-autorotate.py kernel/build-linux-kernel.sh kernel/apply-kernel-patches.sh kernel/ensure-camera-module.sh camera/setup-system-cameras.sh camera/surface-camera-relay.sh camera/publish-surface-camera.sh camera/check-camera-routing.py camera/check-camera-quality.py camera/build-imx681-ipa.sh camera/surface-camera-ipa-env.sh camera/surface-camera-publisher.c camera/reprobe-front-sensor.sh camera/surface-camera-relay.c camera/check-shared-camera.py camera/loopback-writer.h tests/check-v4l2-buffers.c patches/v4l2loopback-capture-queue.patch; do
   [[ -f $SCRIPT_DIR/$helper ]] || fail "Missing $helper; keep the entire installer folder together."
 done
 while IFS= read -r patch; do
@@ -47,7 +47,7 @@ while IFS= read -r line; do
     KERNEL_VERSION=\"*\") version=${line#KERNEL_VERSION=\"}; version=${version%\"} ;;
     CUSTOM_SUFFIX=\"*\") suffix=${line#CUSTOM_SUFFIX=\"}; suffix=${suffix%\"} ;;
   esac
-done < "$SCRIPT_DIR/build-linux-kernel.sh"
+done < "$SCRIPT_DIR/kernel/build-linux-kernel.sh"
 [[ $version =~ ^[a-zA-Z0-9_.+-]+$ && $suffix =~ ^[a-zA-Z0-9_.+-]+$ ]] || fail 'Cannot read kernel target from build script.'
 target="$version$suffix"
 running=$(uname -r)
@@ -63,21 +63,21 @@ case "$mode" in
     done
     systemctl --user --no-pager status surface11-cameras.service surface11-autorotate.service surface11-touch.service || true
     ;;
-  touch) bash "$SCRIPT_DIR/setup-touch.sh" install ;;
-  rotation) bash "$SCRIPT_DIR/setup-autorotation.sh" install ;;
-  quality) bash "$SCRIPT_DIR/setup-system-cameras.sh" quality ;;
-  undo-cameras) bash "$SCRIPT_DIR/setup-system-cameras.sh" undo ;;
+  touch) bash "$SCRIPT_DIR/input/setup-touch.sh" install ;;
+  rotation) bash "$SCRIPT_DIR/input/setup-autorotation.sh" install ;;
+  quality) bash "$SCRIPT_DIR/camera/setup-system-cameras.sh" quality ;;
+  undo-cameras) bash "$SCRIPT_DIR/camera/setup-system-cameras.sh" undo ;;
   install|cameras|kernel)
     if [[ $mode == install ]]; then
-      bash "$SCRIPT_DIR/setup-autorotation.sh" install
-      bash "$SCRIPT_DIR/setup-touch.sh" install
+      bash "$SCRIPT_DIR/input/setup-autorotation.sh" install
+      bash "$SCRIPT_DIR/input/setup-touch.sh" install
     fi
     if [[ $mode == kernel || ( $mode == install && $running != "$target" ) ]]; then
       [[ $running != "$target" ]] || fail 'Boot another kernel before rebuilding the same release.'
       mountpoint -q /efi || fail 'Mount your systemd-boot EFI partition at /efi before building.'
       sudo test -d /efi/loader || fail 'The current installer requires systemd-boot at /efi.'
       sudo pacman -S --needed linux-firmware sof-firmware alsa-ucm-conf alsa-utils
-      bash "$SCRIPT_DIR/build-linux-kernel.sh"
+      bash "$SCRIPT_DIR/kernel/build-linux-kernel.sh"
       echo
       echo "Kernel installed. Reboot and select Linux Surface11 Cameras ($target)."
       printf 'Then run the SAME installer again: bash %q install\n' "$SCRIPT_DIR/install-surface11.sh"
@@ -88,8 +88,8 @@ case "$mode" in
     modinfo imx681 >/dev/null || fail 'The IMX681 sensor module is missing from this custom kernel.'
     echo 'Fully quit camera apps and Discord from its tray menu before continuing.'
     sudo pacman -S --needed linux-firmware sof-firmware alsa-ucm-conf alsa-utils
-    bash "$SCRIPT_DIR/setup-system-cameras.sh" install
-    bash "$SCRIPT_DIR/setup-system-cameras.sh" check
+    bash "$SCRIPT_DIR/camera/setup-system-cameras.sh" install
+    bash "$SCRIPT_DIR/camera/setup-system-cameras.sh" check
     echo 'Camera checks passed. Test Surface Front Camera and Surface Rear Camera using normal app launchers.'
     echo 'App behavior, audio, reboot/reopen and image quality still need checking on each machine.'
     ;;

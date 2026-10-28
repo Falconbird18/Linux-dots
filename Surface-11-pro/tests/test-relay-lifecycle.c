@@ -1,31 +1,33 @@
-/* Test the actual adapted relay with synthetic input; no camera or loopback. */
+/* Exercise the maintained relay with synthetic input; no camera or loopback. */
 #include <assert.h>
+#include <fcntl.h>
 #define main original_relay_main
-#include RELAY_SOURCE
+#include "../camera/surface-camera-relay.c"
 #undef main
-static void destroyed(gpointer data, GObject *object) { (void)object; *(gboolean *)data = TRUE; }
 int main(int argc, char **argv) {
-  gst_init(&argc, &argv);
-  loop = g_main_loop_new(NULL, FALSE);
-  output_pipeline = gst_parse_launch("appsrc name=appsrc caps=video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,colorimetry=bt601 ! fakesink", NULL);
-  opt_input = "videotestsrc is-live=true ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1,colorimetry=bt601 ! identity";
-  for (int n = 0; n < 4; n++) {
-    GstElement *input = input_pipeline_get();
-    assert(input && input_bus_watch_id != 0);
-    gboolean gone = FALSE;
-    g_object_weak_ref(G_OBJECT(input), destroyed, &gone);
-    input_pipeline_disable();
-    assert(gone && input_pipeline == NULL && input_bus_watch_id == 0);
-  }
-  GstElement *input = input_pipeline_get();
-  GError *error = g_error_new_literal(GST_STREAM_ERROR, GST_STREAM_ERROR_FAILED, "Synthetic native capture failure");
-  GstMessage *message = gst_message_new_error(GST_OBJECT(input), error, "test");
-  g_error_free(error);
-  backend_pipeline_bus_call(NULL, message, input);
-  assert(backend_failed);
-  gst_message_unref(message);
-  input_pipeline_disable();
-  gst_object_unref(output_pipeline); g_main_loop_unref(loop);
-  g_print("PASS: native inputs/watches released across reopen; backend errors mark relay failure\n");
-  return 0;
+    gst_init(&argc, &argv);
+    loop = g_main_loop_new(NULL, FALSE);
+    struct camera camera = { .name = "test", .writer.fd = open("/dev/null", O_WRONLY) };
+    assert(camera.writer.fd >= 0);
+    camera.pipeline = gst_parse_launch("videotestsrc is-live=true ! fakesink", NULL);
+    assert(camera.pipeline);
+    for (int n = 0; n < 4; n++) {
+        set_demand(&camera, TRUE);
+        assert(camera.active);
+        set_demand(&camera, FALSE);
+        GstState state;
+        gst_element_get_state(camera.pipeline, &state, NULL, GST_SECOND);
+        assert(!camera.active && state == GST_STATE_NULL);
+    }
+    GError *error = g_error_new_literal(GST_STREAM_ERROR, GST_STREAM_ERROR_FAILED, "Synthetic capture failure");
+    GstMessage *message = gst_message_new_error(GST_OBJECT(camera.pipeline), error, "test");
+    g_error_free(error);
+    bus_message(NULL, message, &camera);
+    assert(result == 1);
+    gst_message_unref(message);
+    gst_object_unref(camera.pipeline);
+    close(camera.writer.fd);
+    g_main_loop_unref(loop);
+    g_print("PASS: maintained relay stops capture across reopen and reports backend failures\n");
+    return 0;
 }

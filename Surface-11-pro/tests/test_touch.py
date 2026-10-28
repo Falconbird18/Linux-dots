@@ -3,8 +3,9 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import subprocess
 
-spec = importlib.util.spec_from_file_location('touch', Path(__file__).parents[1] / 'surface11-touch.py')
+spec = importlib.util.spec_from_file_location('touch', Path(__file__).parents[1] / 'input/surface11-touch.py')
 touch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(touch)
 
@@ -50,6 +51,24 @@ class KeyboardDetection(unittest.TestCase):
             self.device(root / 'virtual', 0, [16, 28, 30, 44, 57])
             (root / 'event0').symlink_to(root / 'virtual/event0')
             self.assertTrue(touch.needs_keyboard(root))
+
+
+class DockMode(unittest.TestCase):
+    def test_tablet_keeps_dock_visible(self):
+        with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'BAR_MANUAL_HIDE_SUCCESS')) as run:
+            self.assertTrue(touch.set_dock_tablet_mode(True))
+            self.assertEqual(run.call_args.args[0][-1], 'manualHide')
+
+    def test_desktop_autohides_dock(self):
+        with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'BAR_AUTO_HIDE_SUCCESS')) as run:
+            self.assertTrue(touch.set_dock_tablet_mode(False))
+            self.assertEqual(run.call_args.args[0][-1], 'autoHide')
+
+    def test_unavailable_dock_is_retried(self):
+        with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'DOCK_NOT_FOUND')):
+            self.assertFalse(touch.set_dock_tablet_mode(True))
+        with patch.object(touch.subprocess, 'run', side_effect=subprocess.TimeoutExpired('dms', 4)):
+            self.assertFalse(touch.set_dock_tablet_mode(True))
 
 
 if __name__ == '__main__':

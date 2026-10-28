@@ -84,7 +84,7 @@ static ssize_t fake_write (int fd, const void *buf, size_t size) {
 #define ioctl fake_ioctl
 #define write fake_write
 #define gst_app_sink_pull_sample fake_pull
-#include "../loopback-writer.h"
+#include "../camera/loopback-writer.h"
 #undef close
 
 int main (int argc, char **argv) {

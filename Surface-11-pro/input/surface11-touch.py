@@ -4,6 +4,7 @@ import fcntl
 import os
 from pathlib import Path
 import signal
+import shutil
 import struct
 import subprocess
 import time
@@ -48,9 +49,23 @@ def needs_keyboard(root=Path('/sys/class/input')):
     return True
 
 
+def set_dock_tablet_mode(tablet):
+    """Reveal the dock in tablet mode; auto-hide it with a typing keyboard."""
+    try:
+        result = subprocess.run(
+            ['dms', 'ipc', 'call', 'dock', 'manualHide' if tablet else 'autoHide'],
+            text=True, capture_output=True, timeout=4)
+        expected = 'BAR_MANUAL_HIDE_SUCCESS' if tablet else 'BAR_AUTO_HIDE_SUCCESS'
+        return result.returncode == 0 and expected in result.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def main():
     child = None
     stopped = False
+    dock_check = 0.0
+    last_mode = None
 
     def stop(*_):
         nonlocal stopped
@@ -61,6 +76,20 @@ def main():
     try:
         while not stopped:
             wanted = needs_keyboard()
+            # Dux may start after this service or restart during the session.
+            # Retry failures, and reconcile once a minute after a successful call.
+            now = time.monotonic()
+            if wanted != last_mode:
+                dock_check = 0.0
+                last_mode = wanted
+            if now >= dock_check:
+                if set_dock_tablet_mode(wanted):
+                    dock_check = now + 60
+                else:
+                    dock_check = now + 5
+            if not shutil.which('squeekboard'):
+                time.sleep(1)
+                continue
             if child and child.poll() is not None:
                 print(f'Squeekboard exited: {child.returncode}', flush=True)
                 child = None

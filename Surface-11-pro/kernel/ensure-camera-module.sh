@@ -7,7 +7,7 @@ mode="${2:-check}"
 version=0.15.4.surface11.1
 source_dir="/usr/src/v4l2loopback-$version"
 base_dir=/usr/src/v4l2loopback-0.15.4
-patch_file="$SCRIPT_DIR/patches/v4l2loopback-capture-queue.patch"
+patch_file="$SCRIPT_DIR/../patches/v4l2loopback-capture-queue.patch"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 [[ $mode == check || $mode == rebuild ]] || fail 'Expected check or rebuild mode.'
 [[ -f /usr/lib/modules/$kernel/build/Module.symvers ]] || fail "Missing configured build tree for $kernel."

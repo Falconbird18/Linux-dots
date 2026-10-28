@@ -30,7 +30,6 @@ cat > "$config_home/systemd/user/surface11-touch.service" <<'UNIT'
 Description=Surface tablet desktop keyboard
 PartOf=hyprland-session.target
 StartLimitIntervalSec=0
-ConditionPathExists=/usr/bin/squeekboard
 
 [Service]
 ExecStart=/usr/bin/python3 "%h/.local/lib/surface11/touch.py"
@@ -54,12 +53,7 @@ Icon=input-keyboard
 Categories=Utility;Accessibility;
 Terminal=false
 DESKTOP
-# Use live IPC to avoid overwriting Dux's in-memory settings and personal layout.
-if dms ipc call dock manualHide; then
-    echo 'Dux dock stays visible, so apps remain accessible without hover.'
-else
-    echo 'Dux is not reachable: run this script again in the Dux session to set dock visibility.' >&2
-fi
+# The service follows keyboard/tablet state and controls Dux dock auto-hide.
 systemctl --user daemon-reload
 systemctl --user enable surface11-touch.service
 if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then

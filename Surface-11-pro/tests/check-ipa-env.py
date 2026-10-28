@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix='surface11-ipa-') as temporary:
     packages = subprocess.check_output(['pacman', '-Q', 'libcamera', 'libcamera-ipa'])
     (ipa / 'packages.txt').write_bytes(packages)
     env = directory / 'ipa-env'
-    command = ['bash', str(ROOT / 'surface-camera-ipa-env.sh'), str(ipa), str(env)]
+    command = ['bash', str(ROOT / 'camera/surface-camera-ipa-env.sh'), str(ipa), str(env)]
     subprocess.run(command, check=True)
     assert str(ipa) in env.read_text()
     (ipa / 'packages.txt').write_text('changed packages\n')

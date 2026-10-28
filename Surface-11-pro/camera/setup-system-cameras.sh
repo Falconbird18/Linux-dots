@@ -47,7 +47,7 @@ case "${1:-check}" in
     sudo pacman -S --needed base-devel git python python-gobject dkms v4l2loopback-dkms v4l-utils \
       pipewire wireplumber gst-plugin-libcamera libcamera libcamera-ipa gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire \
       meson ninja curl patch python-jinja python-yaml python-ply python-pyparsing libyaml gnutls
-    for source in tests/check-v4l2-buffers.c patches/v4l2loopback-capture-queue.patch check-camera-quality.py loopback-writer.h surface-camera-relay.c check-shared-camera.py surface-camera-publisher.c reprobe-front-sensor.sh surface-camera-ipa-env.sh build-imx681-ipa.sh patches/libcamera-imx681-helper.patch tests/test-imx681-gain.cpp publish-surface-camera.sh check-camera-routing.py wireplumber/90-surface11-camera.conf; do
+    for source in ../tests/check-v4l2-buffers.c ../patches/v4l2loopback-capture-queue.patch check-camera-quality.py loopback-writer.h surface-camera-relay.c check-shared-camera.py surface-camera-publisher.c reprobe-front-sensor.sh surface-camera-ipa-env.sh build-imx681-ipa.sh ../patches/libcamera-imx681-helper.patch ../tests/test-imx681-gain.cpp publish-surface-camera.sh check-camera-routing.py ../wireplumber/90-surface11-camera.conf; do
       [[ -f $SCRIPT_DIR/$source ]] || fail "Missing $source; keep the installer folder together."
     done
     for file in "$WP_CONF"; do
@@ -71,7 +71,7 @@ case "${1:-check}" in
     bash "$SCRIPT_DIR/surface-camera-relay.sh" rear --validate
     # The custom kernel is installed outside the distro package hooks, so build
     # its loopback module explicitly. This does not change kernel source files.
-    bash "$SCRIPT_DIR/ensure-camera-module.sh" "$kernel"
+    bash "$SCRIPT_DIR/../kernel/ensure-camera-module.sh" "$kernel"
     for f in /etc/modprobe.d/surface11-camera.conf /etc/modules-load.d/surface11-camera.conf /etc/udev/rules.d/70-surface11-camera.rules /etc/systemd/system/surface11-camera-sensor.service; do
       if [[ -e $f ]] && ! grep -q 'Managed by surface11-camera' "$f"; then fail "Refusing to overwrite $f"; fi
     done
@@ -127,8 +127,8 @@ UNIT
     sudo systemctl daemon-reload
     sudo systemctl enable --now surface11-camera-sensor.service
     wp_changed=0
-    cmp -s "$SCRIPT_DIR/wireplumber/90-surface11-camera.conf" "$WP_CONF" || wp_changed=1
-    install -m 644 "$SCRIPT_DIR/wireplumber/90-surface11-camera.conf" "$WP_CONF"
+    cmp -s "$SCRIPT_DIR/../wireplumber/90-surface11-camera.conf" "$WP_CONF" || wp_changed=1
+    install -m 644 "$SCRIPT_DIR/../wireplumber/90-surface11-camera.conf" "$WP_CONF"
     install -m 755 "$CACHE/imx681-ipa/ipa/ipa_soft_simple.so" "$IPA_DIR/ipa_soft_simple.so"
     install -m 644 "$CACHE/imx681-ipa/packages.txt" "$IPA_DIR/packages.txt"
     # Retire the managed native-backend permission and audio-process IPA experiments.
@@ -253,7 +253,7 @@ UNIT
     if ! python3 -u "$SCRIPT_DIR/check-shared-camera.py"; then failed=1; fi
     # Retain mmap frames while the producer runs: catches unqueued dequeues and
     # writes into application-owned buffers that a fakesink cannot reveal.
-    cc -O2 -Wall -Wextra "$SCRIPT_DIR/tests/check-v4l2-buffers.c" -o "$capture_dir/check-buffers"
+    cc -O2 -Wall -Wextra "$SCRIPT_DIR/../tests/check-v4l2-buffers.c" -o "$capture_dir/check-buffers"
     for number in 42 43; do
       if ! timeout --kill-after=2s 45s "$capture_dir/check-buffers" "/dev/video$number"; then failed=1; fi
     done

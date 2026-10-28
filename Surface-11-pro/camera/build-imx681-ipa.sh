@@ -11,7 +11,7 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
   fail "The IMX681 IPA helper currently supports libcamera $version only; do not load it into another version."
 mkdir -p "$cache"
 identity="$(pacman -Q libcamera libcamera-ipa)
-$(sha256sum "$SCRIPT_DIR/patches/libcamera-imx681-helper.patch" "$SCRIPT_DIR/tests/test-imx681-gain.cpp" "$SCRIPT_DIR/build-imx681-ipa.sh")"
+$(sha256sum "$SCRIPT_DIR/../patches/libcamera-imx681-helper.patch" "$SCRIPT_DIR/../tests/test-imx681-gain.cpp" "$SCRIPT_DIR/build-imx681-ipa.sh")"
 if [[ -s $cache/ipa/ipa_soft_simple.so && -f $cache/build-identity ]] &&
    [[ $(cat "$cache/build-identity") == "$identity" ]]; then
   echo 'Verified cached IMX681 IPA build for the installed libcamera packages.'
@@ -30,7 +30,7 @@ build_dir="$cache/build"
 rm -rf -- "$source_dir" "$build_dir" "$cache/stage"
 mkdir -p "$source_dir"
 tar --extract --gzip --file="$archive" --directory="$source_dir" --strip-components=1
-patch --directory="$source_dir" --strip=1 --forward < "$SCRIPT_DIR/patches/libcamera-imx681-helper.patch"
+patch --directory="$source_dir" --strip=1 --forward < "$SCRIPT_DIR/../patches/libcamera-imx681-helper.patch"
 python3 - "$source_dir/src/ipa/simple/meson.build" <<'PY'
 from pathlib import Path
 import sys
@@ -49,7 +49,7 @@ jobs=$(nproc)
 ninja -C "$build_dir" -j "$jobs" src/ipa/simple/ipa_soft_simple.so
 read -r -a base_libs <<< "$(pkg-config --libs libcamera-base)"
 c++ -std=c++17 -DLIBCAMERA_BASE_PRIVATE -I"$source_dir/include" -I"$build_dir/include" -I"$source_dir/src/ipa" \
-  -include "$build_dir/config.h" "$SCRIPT_DIR/tests/test-imx681-gain.cpp" \
+  -include "$build_dir/config.h" "$SCRIPT_DIR/../tests/test-imx681-gain.cpp" \
   "$source_dir/src/ipa/libipa/camera_sensor_helper.cpp" "${base_libs[@]}" -o "$cache/test-imx681-gain"
 "$cache/test-imx681-gain"
 # Stage only the IPA module, stripping its build-tree runtime library paths.

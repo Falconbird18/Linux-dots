@@ -4,8 +4,9 @@ hl.config({
         touchdevice = { enabled = true, output = "eDP-1" },
         tablet = { output = "eDP-1", relative_input = false },
     },
-    gestures = { workspace_swipe_touch = true },
-    cursor = { hide_on_touch = true },
+    -- Keep native taps; edge gestures intercept touch streams on this build.
+    gestures = { workspace_swipe_touch = false },
+    cursor = { hide_on_touch = false },
 })
 -- Also works in clients without Wayland text-input support.
 hl.bind("SUPER + CTRL + K", hl.dsp.exec_cmd("busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true"), { description = "Show touch keyboard" })

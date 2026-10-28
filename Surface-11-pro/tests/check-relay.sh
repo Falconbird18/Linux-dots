@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT
-for script in "$ROOT"/*.sh; do bash -n "$script"; done
+for script in "$ROOT"/*.sh "$ROOT"/{camera,input,kernel}/*.sh; do bash -n "$script"; done
 for profile in balanced detail; do
   for camera in front rear; do
-    SURFACE11_CAMERA_QUALITY=$profile bash "$ROOT/surface-camera-relay.sh" "$camera" --validate
+    SURFACE11_CAMERA_QUALITY=$profile bash "$ROOT/camera/surface-camera-relay.sh" "$camera" --validate
   done
 done
 read -r -a cflags <<< "$(pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)"

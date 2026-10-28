@@ -7,8 +7,8 @@ cd "$source_dir"
 [[ -f Makefile && -d drivers/media/i2c ]] || { echo 'Not a kernel source tree' >&2; exit 1; }
 while IFS= read -r name; do
   [[ -n $name && $name != \#* ]] || continue
-  [[ $name != */* && -s $SCRIPT_DIR/patches/$name ]] || exit 1
-  patch_file="$SCRIPT_DIR/patches/$name"
+  [[ $name != */* && -s $SCRIPT_DIR/../patches/$name ]] || exit 1
+  patch_file="$SCRIPT_DIR/../patches/$name"
   if git apply --check "$patch_file" 2>/dev/null; then
     git apply "$patch_file"
     echo "Applied $name"
@@ -18,4 +18,4 @@ while IFS= read -r name; do
     echo "Cannot apply or verify $name. Use a fresh pinned kernel tree; partial/unknown changes are not accepted." >&2
     exit 1
   fi
-done < "$SCRIPT_DIR/patches/series"
+done < "$SCRIPT_DIR/../patches/series"

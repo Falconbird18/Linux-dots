@@ -13,8 +13,8 @@ tar -xf "$archive" --strip-components=1 -C "$build" \
   linux-7.2.9/include/linux/platform_data/x86/int3472.h \
   linux-7.2.9/drivers/platform/x86/intel/int3472/discrete.c \
   linux-7.2.9/drivers/soundwire/dmi-quirks.c
-bash "$ROOT/apply-kernel-patches.sh" "$build"
-bash "$ROOT/apply-kernel-patches.sh" "$build"
+bash "$ROOT/kernel/apply-kernel-patches.sh" "$build"
+bash "$ROOT/kernel/apply-kernel-patches.sh" "$build"
 if rg '=3D|v4l2_subdev_client_info' "$build/drivers/media/i2c/imx681.c"; then
   echo 'Invalid IMX681 source' >&2; exit 1
 fi

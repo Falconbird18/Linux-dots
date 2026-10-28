@@ -34,6 +34,21 @@ the installer deliberately does not perform an unattended full-system upgrade.
 Secure Boot signing/enrollment must already be configured if Secure Boot is
 enabled; this script does not manage signing keys.
 
+## Folder layout
+
+- `install-surface11.sh`: supported entry point for installation and recovery.
+- `input/`: touch/tablet keyboard setup, Hyprland config and auto-rotation.
+- `camera/`: camera setup, runtime helpers and maintained C sources.
+- `kernel/`: kernel build, patch application and loopback module setup.
+- `patches/`: pinned kernel/libcamera/loopback patches and ordered kernel series.
+- `wireplumber/`: camera monitor configuration.
+- `tests/`: hardware-free checks and explicit hardware diagnostics.
+
+Keep these folders together. Build artifacts stay in the existing external
+cache/build locations. Generated Python bytecode and the unused legacy relay
+source-rewriting tools have been removed; current builds use the maintained C
+source in `camera/`.
+
 ## Camera path
 
 Both sensors produce raw Bayer data. A kernel driver alone does not make them
@@ -91,7 +106,7 @@ may degrade front-camera exposure if the distro still lacks its gain helper.
 
 ```sh
 bash install-surface11.sh status
-bash setup-system-cameras.sh check
+bash camera/setup-system-cameras.sh check
 bash install-surface11.sh quality
 bash install-surface11.sh undo-cameras
 ```
@@ -109,6 +124,7 @@ Hardware-free checks (requires the installed development dependencies):
 
 ```sh
 bash tests/check-relay.sh
+python3 tests/check-relay-lifecycle.py
 dbus-run-session -- python3 tests/check-publisher.py
 bash tests/check-kernel-patches.sh "$HOME/surface-kernel-build/linux-7.2.9.tar.xz"
 ```
@@ -116,8 +132,8 @@ bash tests/check-kernel-patches.sh "$HOME/surface-kernel-build/linux-7.2.9.tar.x
 These cover packed/padded frame copies, write errors, color range conversion,
 pixel rotation, noise filtering, gain-helper math, public camera routing,
 concurrent ordinary/portal streams, idle/reopen, and patch application/repeat.
-The relay lifecycle test uses the pinned source cached by the camera installer.
-It prints SKIP if that build has not been performed yet.
+The relay lifecycle test compiles the maintained C source with synthetic input;
+it requires no stale source cache or camera build.
 
 Color accuracy and optical lens correction are deferred. No measured color
 matrices, lens shading maps, or distortion models are installed. The quality
@@ -200,18 +216,20 @@ back-and-forth tilts, lock/unlock, suspend/resume, a Hyprland reload, a new logi
 and an external monitor. Software tests cannot verify physical sensor mounting,
 digitizer calibration, or the driver's modeset smoothness.
 
-### Tablet keyboard and touch navigation
+## Tablet keyboard and touch navigation
 
-The default installer also runs `setup-touch.sh`. To apply just these changes:
+The default installer also runs `input/setup-touch.sh`. To apply just these changes:
 
 ```bash
 bash Surface-11-pro/install-surface11.sh touch
 ```
 
 This installs Squeekboard from Arch, enables a session-scoped `surface11-touch`
-user service, maps touch and pen input to `eDP-1`, hides the pointer on touch,
-enables horizontal touchscreen edge swipes between workspaces, and disables
-Dux dock auto-hide so apps do not require hovering. Auto-rotation continues to
+user service and maps touch and pen input to `eDP-1`. Touchscreen workspace
+edge gestures are disabled: enabling them caused taps to stop registering on
+the tested Hyprland build. The pointer remains visible. Dux dock auto-hide
+is enabled with a usable typing keyboard and disabled in tablet mode, so
+the dock stays reachable without hovering. Auto-rotation continues to
 manage touch/pen transforms. The setup backs up Hyprland before adding its
 include and uses Dux IPC to preserve other personal shell settings.
 
@@ -230,12 +248,14 @@ Dux's secure lock screen uses its own keyboard: tap the keyboard icon beside
 the password field. A desktop layer keyboard cannot replace the secure lock UI.
 
 Check `systemctl --user status surface11-touch.service` and
-`journalctl --user -u surface11-touch.service`. The service is skipped until
-`/usr/bin/squeekboard` is installed. `setup-touch.sh --configure-only` prepares
+`journalctl --user -u surface11-touch.service`. The service controls the dock
+even if Squeekboard is missing.
+`input/setup-touch.sh --configure-only` prepares
 user files without attempting package installation; it exits with a reminder
 if Squeekboard is missing. Re-running the normal `touch` command installs the
 package and starts the service. Test detach/reattach, text entry, lock-screen
-entry, edge swipes, and rotated touch alignment on the physical device.
+entry, normal taps, dock visibility, and rotated touch alignment on the physical
+device.
 
 References: [Squeekboard](https://world.pages.gitlab.gnome.org/Phosh/squeekboard/)
 and [Hyprland input/gesture options](https://wiki.hypr.land/Configuring/Basics/Variables/).

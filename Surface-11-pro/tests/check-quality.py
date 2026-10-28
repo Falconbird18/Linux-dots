@@ -14,14 +14,14 @@ gi.require_version('Gst', '1.0')
 from gi.repository import Gst
 Gst.init(None)
 ROOT = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location('camera_quality', ROOT / 'check-camera-quality.py')
+spec = importlib.util.spec_from_file_location('camera_quality', ROOT / 'camera/check-camera-quality.py')
 quality = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(quality)
 
 
 def process(profile, camera, pixels, fmt='I420', color='bt709', orientation=True):
     descriptions = subprocess.check_output(
-        ['bash', str(ROOT / 'surface-camera-relay.sh'), camera, '--describe'],
+        ['bash', str(ROOT / 'camera/surface-camera-relay.sh'), camera, '--describe'],
         env={**os.environ, 'SURFACE11_CAMERA_QUALITY': profile}, text=True).splitlines()
     processing = descriptions[0].split(' ! ', 1)[1]
     if not orientation:

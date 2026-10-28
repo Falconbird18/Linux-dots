@@ -5,7 +5,7 @@ import sys
 sys.dont_write_bytecode = True
 from pathlib import Path
 
-path = Path(__file__).resolve().parent.parent / 'check-camera-routing.py'
+path = Path(__file__).resolve().parent.parent / 'camera/check-camera-routing.py'
 spec = importlib.util.spec_from_file_location('camera_routing', path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
