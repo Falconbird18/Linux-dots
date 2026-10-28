@@ -9,6 +9,11 @@ case ${1:-install} in
   status) systemctl --user --no-pager status surface11-touch.service; exit ;;
   *) echo 'Usage: setup-touch.sh [install|status|--configure-only]' >&2; exit 2 ;;
 esac
+# Preserve existing input layouts, but give a fresh Hyprland session a valid one.
+gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
+case $(gsettings get org.gnome.desktop.input-sources sources) in
+  '[]'|'@a(ss) []') gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us')]" ;;
+esac
 config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 config="$config_home/hypr/hyprland.lua"
 [[ -f $config ]] || { echo "Missing $config" >&2; exit 1; }
@@ -43,12 +48,12 @@ WantedBy=hyprland-session.target
 UNIT
 # Make the keyboard available through Dux's launcher and dock as well as text focus.
 mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-cat > "${XDG_DATA_HOME:-$HOME/.local/share}/applications/surface11-keyboard.desktop" <<'DESKTOP'
+cat > "${XDG_DATA_HOME:-$HOME/.local/share}/applications/surface11-keyboard.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Show Touch Keyboard
 Comment=Show the tablet keyboard for apps without automatic text input
-Exec=busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true
+Exec=/usr/bin/python3 "$HOME/.local/lib/surface11/touch.py" --show
 Icon=input-keyboard
 Categories=Utility;Accessibility;
 Terminal=false

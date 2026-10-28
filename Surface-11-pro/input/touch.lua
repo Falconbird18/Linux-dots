@@ -9,7 +9,7 @@ hl.config({
     cursor = { hide_on_touch = false },
 })
 -- Also works in clients without Wayland text-input support.
-hl.bind("SUPER + CTRL + K", hl.dsp.exec_cmd("busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true"), { description = "Show touch keyboard" })
+hl.bind("SUPER + CTRL + K", hl.dsp.exec_cmd("python3 \"$HOME/.local/lib/surface11/touch.py\" --show"), { description = "Show touch keyboard" })
 hl.on("hyprland.start", function()
     hl.exec_cmd("sh -c 'systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_RUNTIME_DIR && systemctl --user restart surface11-touch.service'")
 end)

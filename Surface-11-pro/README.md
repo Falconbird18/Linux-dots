@@ -238,11 +238,18 @@ power/volume buttons and consumer-control interfaces. It enables Squeekboard
 when no real typing keyboard is connected, and stops it when one reconnects.
 Folding the Surface keyboard back also works when the session has permission
 to query the tablet switch; an external typing keyboard still suppresses it.
-Squeekboard appears when a compatible Wayland text field requests input. For
+The installer enables the accessibility switch required by Squeekboard and
+sets a US layout only if no layouts are configured. On tablet entry the service
+starts the keyboard, waits for its D-Bus interface, and explicitly shows it;
+this also works in apps that never request a Wayland input method. Compatible
+Wayland text fields can subsequently show/hide it automatically. For
 clients without text-input support, launch **Show Touch Keyboard** from Dux
-(or pin that launcher to the dock), or press **Super+Ctrl+K**. This manual action
-requires tablet mode/no connected typing keyboard, when the service is running
-Squeekboard. Text-field detection is client-dependent, particularly for XWayland.
+(or pin that launcher to the dock), or press **Super+Ctrl+K**. The launcher
+requests the keyboard through the service, starts it if needed, and waits for
+readiness before showing it. Both the launcher and service enforce tablet mode:
+with a usable typing keyboard attached, requests are rejected and the keyboard
+process is stopped. Text-field detection is client-dependent, particularly for
+XWayland.
 
 Dux's secure lock screen uses its own keyboard: tap the keyboard icon beside
 the password field. A desktop layer keyboard cannot replace the secure lock UI.
@@ -257,5 +264,6 @@ package and starts the service. Test detach/reattach, text entry, lock-screen
 entry, normal taps, dock visibility, and rotated touch alignment on the physical
 device.
 
-References: [Squeekboard](https://world.pages.gitlab.gnome.org/Phosh/squeekboard/)
+References: [Squeekboard](https://world.pages.gitlab.gnome.org/Phosh/squeekboard/),
+[Squeekboard visibility controls](https://world.pages.gitlab.gnome.org/Phosh/squeekboard/hacking.html),
 and [Hyprland input/gesture options](https://wiki.hypr.land/Configuring/Basics/Variables/).
