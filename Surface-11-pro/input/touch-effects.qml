@@ -50,15 +50,15 @@ ShellRoot {
             property real ny: 0
             x: nx * panel.width - width / 2
             y: ny * panel.height - height / 2
-            width: 38; height: 38; radius: 19
-            color: "#227ec8ff"
-            border { color: "#b3d9ff"; width: 2 }
-            opacity: 0.75
+            width: 20; height: 20; radius: 10
+            color: "transparent"
+            border { color: "#a7b9c9"; width: 1 }
+            opacity: 0.28
             function release() { fade.start(); }
             ParallelAnimation {
                 id: fade
-                NumberAnimation { target: ring; property: "opacity"; to: 0; duration: 260 }
-                NumberAnimation { target: ring; property: "scale"; to: 1.7; duration: 260 }
+                NumberAnimation { target: ring; property: "opacity"; to: 0; duration: 140 }
+                NumberAnimation { target: ring; property: "scale"; to: 1.15; duration: 140 }
                 onFinished: ring.destroy()
             }
         }

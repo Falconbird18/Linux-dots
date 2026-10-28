@@ -55,21 +55,16 @@ class KeyboardDetection(unittest.TestCase):
 
 
 class DockMode(unittest.TestCase):
-    def test_tablet_keeps_dock_visible(self):
-        with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'BAR_MANUAL_HIDE_SUCCESS')) as run:
-            self.assertTrue(touch.set_dock_tablet_mode(True))
-            self.assertEqual(run.call_args.args[0][-1], 'manualHide')
-
-    def test_desktop_autohides_dock(self):
+    def test_dock_autohides(self):
         with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'BAR_AUTO_HIDE_SUCCESS')) as run:
-            self.assertTrue(touch.set_dock_tablet_mode(False))
+            self.assertTrue(touch.set_dock_autohide())
             self.assertEqual(run.call_args.args[0][-1], 'autoHide')
 
     def test_unavailable_dock_is_retried(self):
         with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'DOCK_NOT_FOUND')):
-            self.assertFalse(touch.set_dock_tablet_mode(True))
+            self.assertFalse(touch.set_dock_autohide())
         with patch.object(touch.subprocess, 'run', side_effect=subprocess.TimeoutExpired('dms', 4)):
-            self.assertFalse(touch.set_dock_tablet_mode(True))
+            self.assertFalse(touch.set_dock_autohide())
 
 
 class CursorMode(unittest.TestCase):
@@ -87,7 +82,7 @@ class KeyboardStartup(unittest.TestCase):
         keyboard, effects = MagicMock(), MagicMock()
         keyboard.poll.return_value = effects.poll.return_value = None
         with patch.object(touch, 'needs_keyboard', side_effect=[True, True, False]), \
-             patch.object(touch, 'set_dock_tablet_mode', return_value=True), \
+             patch.object(touch, 'set_dock_autohide', return_value=True), \
              patch.object(touch, 'set_cursor_mode', return_value=True) as cursor, \
              patch.object(touch.shutil, 'which', return_value='/usr/bin/squeekboard'), \
              patch.object(touch.subprocess, 'Popen', side_effect=[effects, keyboard]) as start, \
@@ -105,7 +100,7 @@ class KeyboardStartup(unittest.TestCase):
 
     def test_desktop_never_starts_keyboard_or_feedback(self):
         with patch.object(touch, 'needs_keyboard', return_value=False), \
-             patch.object(touch, 'set_dock_tablet_mode', return_value=True), \
+             patch.object(touch, 'set_dock_autohide', return_value=True), \
              patch.object(touch, 'set_cursor_mode', return_value=True), \
              patch.object(touch.shutil, 'which', return_value='/usr/bin/squeekboard'), \
              patch.object(touch.subprocess, 'Popen') as start, \

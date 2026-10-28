@@ -244,9 +244,10 @@ In tablet mode:
 - Squeekboard starts hidden and follows native Wayland text-input activation.
   Tap a text field to show it; leave text entry (tap outside or close the field)
   to hide it. Pressing Enter while the field retains focus may keep it open.
-- The mouse cursor is hidden and the Dux dock stays visible. Reconnecting the
-  keyboard restores the cursor and dock auto-hide, and stops the desktop keyboard.
-- Small blue touch rings track contacts and fade when released. Their overlay
+- The mouse cursor is hidden. Reconnecting the keyboard restores the cursor
+  and stops the desktop keyboard. The Dux dock auto-hides in both modes.
+- Subtle 20-pixel outline rings track contacts at 28% opacity and fade within
+  140 ms when released. Their overlay
   has an empty input region, so it cannot capture taps or take keyboard focus.
 - Swipe **three fingers left** for the next workspace, **right** for the previous
   workspace. Fingers must arrive together and move horizontally roughly 12% of

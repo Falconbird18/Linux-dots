@@ -49,13 +49,13 @@ def needs_keyboard(root=Path('/sys/class/input')):
     return True
 
 
-def set_dock_tablet_mode(tablet):
-    """Reveal the dock in tablet mode; auto-hide it with a typing keyboard."""
+def set_dock_autohide():
+    """Keep the dock auto-hidden in both desktop and tablet modes."""
     try:
         result = subprocess.run(
-            ['dms', 'ipc', 'call', 'dock', 'manualHide' if tablet else 'autoHide'],
+            ['dms', 'ipc', 'call', 'dock', 'autoHide'],
             text=True, capture_output=True, timeout=4)
-        expected = 'BAR_MANUAL_HIDE_SUCCESS' if tablet else 'BAR_AUTO_HIDE_SUCCESS'
+        expected = 'BAR_AUTO_HIDE_SUCCESS'
         return result.returncode == 0 and expected in result.stdout
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -105,7 +105,7 @@ def main():
                 last_mode = wanted
             if now >= dock_check:
                 cursor_ok = set_cursor_mode(wanted)
-                if set_dock_tablet_mode(wanted) and cursor_ok:
+                if set_dock_autohide() and cursor_ok:
                     dock_check = now + 60
                 else:
                     dock_check = now + 5
