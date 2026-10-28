@@ -6,11 +6,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 usage() {
   cat <<'HELP'
-Usage: bash install-surface11.sh [install|status|cameras|quality|kernel|rotation|undo-cameras]
-  install       Default: build patched kernel if needed; otherwise install cameras.
-  status        Show detected hardware, kernel, camera and rotation service status.
+Usage: bash install-surface11.sh [install|status|cameras|quality|kernel|rotation|touch|undo-cameras]
+  install       Default: configure rotation/touch; build kernel or install cameras.
+  status        Show hardware, kernel, camera, rotation and touch service status.
   cameras       Install/repair standard webcams on the patched custom kernel.
   rotation      Install/repair smooth Hyprland auto-rotation independently.
+  touch         Install/repair tablet keyboard and touchscreen navigation.
   quality       Measure exposure stability/clipping on both shared app routes.
   kernel        Build/install the patched kernel while booted into another kernel.
   undo-cameras  Remove the webcam bridge, keeping kernel drivers and packages.
@@ -24,7 +25,7 @@ HELP
 mode=${1:-install}
 case "$mode" in -h|--help|help) usage; exit 0;; esac
 [[ $# -le 1 ]] || fail 'Expected one optional command; see --help.'
-case "$mode" in install|status|cameras|quality|kernel|rotation|undo-cameras) ;; *) usage >&2; exit 2;; esac
+case "$mode" in install|status|cameras|quality|kernel|rotation|touch|undo-cameras) ;; *) usage >&2; exit 2;; esac
 [[ $EUID -ne 0 ]] || fail 'Run as your desktop user, not with sudo before the whole command.'
 [[ $(uname -m) == x86_64 ]] || fail 'This is the Intel installer; Snapdragon/ARM models are unsupported.'
 vendor=$(cat /sys/class/dmi/id/sys_vendor)
@@ -33,7 +34,7 @@ sku=$(cat /sys/class/dmi/id/product_sku)
   fail "Unsupported hardware: $vendor / $sku. Model-specific patches will not be applied."
 command -v pacman >/dev/null || fail 'This installer currently supports Arch-based distributions only.'
 command -v systemctl >/dev/null || fail 'systemd is required.'
-for helper in setup-autorotation.sh surface11-autorotate.py build-linux-kernel.sh apply-kernel-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py check-camera-quality.py build-imx681-ipa.sh surface-camera-ipa-env.sh surface-camera-publisher.c reprobe-front-sensor.sh surface-camera-relay.c check-shared-camera.py loopback-writer.h tests/check-v4l2-buffers.c patches/v4l2loopback-capture-queue.patch; do
+for helper in setup-touch.sh surface11-touch.py touch.lua setup-autorotation.sh surface11-autorotate.py build-linux-kernel.sh apply-kernel-patches.sh ensure-camera-module.sh setup-system-cameras.sh surface-camera-relay.sh publish-surface-camera.sh check-camera-routing.py check-camera-quality.py build-imx681-ipa.sh surface-camera-ipa-env.sh surface-camera-publisher.c reprobe-front-sensor.sh surface-camera-relay.c check-shared-camera.py loopback-writer.h tests/check-v4l2-buffers.c patches/v4l2loopback-capture-queue.patch; do
   [[ -f $SCRIPT_DIR/$helper ]] || fail "Missing $helper; keep the entire installer folder together."
 done
 while IFS= read -r patch; do
@@ -60,14 +61,16 @@ case "$mode" in
         echo "/dev/video$number: $(cat "/sys/class/video4linux/video$number/name")"
       fi
     done
-    systemctl --user --no-pager status surface11-cameras.service surface11-autorotate.service || true
+    systemctl --user --no-pager status surface11-cameras.service surface11-autorotate.service surface11-touch.service || true
     ;;
+  touch) bash "$SCRIPT_DIR/setup-touch.sh" install ;;
   rotation) bash "$SCRIPT_DIR/setup-autorotation.sh" install ;;
   quality) bash "$SCRIPT_DIR/setup-system-cameras.sh" quality ;;
   undo-cameras) bash "$SCRIPT_DIR/setup-system-cameras.sh" undo ;;
   install|cameras|kernel)
     if [[ $mode == install ]]; then
       bash "$SCRIPT_DIR/setup-autorotation.sh" install
+      bash "$SCRIPT_DIR/setup-touch.sh" install
     fi
     if [[ $mode == kernel || ( $mode == install && $running != "$target" ) ]]; then
       [[ $running != "$target" ]] || fail 'Boot another kernel before rebuilding the same release.'

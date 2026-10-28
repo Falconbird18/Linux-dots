@@ -199,3 +199,43 @@ then check each corner with touch and pen in each orientation. Check rapid
 back-and-forth tilts, lock/unlock, suspend/resume, a Hyprland reload, a new login,
 and an external monitor. Software tests cannot verify physical sensor mounting,
 digitizer calibration, or the driver's modeset smoothness.
+
+### Tablet keyboard and touch navigation
+
+The default installer also runs `setup-touch.sh`. To apply just these changes:
+
+```bash
+bash Surface-11-pro/install-surface11.sh touch
+```
+
+This installs Squeekboard from Arch, enables a session-scoped `surface11-touch`
+user service, maps touch and pen input to `eDP-1`, hides the pointer on touch,
+enables horizontal touchscreen edge swipes between workspaces, and disables
+Dux dock auto-hide so apps do not require hovering. Auto-rotation continues to
+manage touch/pen transforms. The setup backs up Hyprland before adding its
+include and uses Dux IPC to preserve other personal shell settings.
+
+The service checks hardware once per second. It ignores virtual keyd devices,
+power/volume buttons and consumer-control interfaces. It enables Squeekboard
+when no real typing keyboard is connected, and stops it when one reconnects.
+Folding the Surface keyboard back also works when the session has permission
+to query the tablet switch; an external typing keyboard still suppresses it.
+Squeekboard appears when a compatible Wayland text field requests input. For
+clients without text-input support, launch **Show Touch Keyboard** from Dux
+(or pin that launcher to the dock), or press **Super+Ctrl+K**. This manual action
+requires tablet mode/no connected typing keyboard, when the service is running
+Squeekboard. Text-field detection is client-dependent, particularly for XWayland.
+
+Dux's secure lock screen uses its own keyboard: tap the keyboard icon beside
+the password field. A desktop layer keyboard cannot replace the secure lock UI.
+
+Check `systemctl --user status surface11-touch.service` and
+`journalctl --user -u surface11-touch.service`. The service is skipped until
+`/usr/bin/squeekboard` is installed. `setup-touch.sh --configure-only` prepares
+user files without attempting package installation; it exits with a reminder
+if Squeekboard is missing. Re-running the normal `touch` command installs the
+package and starts the service. Test detach/reattach, text entry, lock-screen
+entry, edge swipes, and rotated touch alignment on the physical device.
+
+References: [Squeekboard](https://world.pages.gitlab.gnome.org/Phosh/squeekboard/)
+and [Hyprland input/gesture options](https://wiki.hypr.land/Configuring/Basics/Variables/).
