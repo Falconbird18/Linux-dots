@@ -1,4 +1,4 @@
-# Intel Surface Pro 11 cameras
+# Intel Surface Pro 11 setup
 
 This folder is a self-contained installer for the Intel Surface Pro 11 for
 Business, SKU 2103, on Arch Linux or an Arch derivative using systemd-boot with
@@ -129,3 +129,73 @@ other than YUYV 720p may need format conversion.
 The loopback driver permits one direct V4L2 capture owner at a time. Concurrent
 apps should use PipeWire; a direct V4L2 app can make the PipeWire capture busy
 until it releases the device, just as with an exclusive physical camera.
+
+## Hyprland auto-rotation
+
+The default `install` command also installs auto-rotation before any kernel build.
+To install rotation independently of the camera/kernel setup, run from your
+Hyprland session:
+
+```sh
+bash install-surface11.sh rotation
+```
+
+Requires modern Hyprland with Lua configuration at
+`$XDG_CONFIG_HOME/hypr/hyprland.lua` (normally `~/.config/hypr/hyprland.lua`).
+The installer installs `iio-sensor-proxy`, starts its system service, copies the
+Python helper into `~/.local/lib/surface11/`, and installs a user systemd service.
+It adds an idempotent startup hook to the Lua configuration and saves the original
+as `hyprland.lua.before-surface11-rotation`. Run the installer again after replacing
+that configuration with a fresh dotfiles copy. No camera-specific kernel is needed
+for rotation; the running kernel must expose the accelerometer to IIO.
+
+The daemon consumes sensor events rather than repeatedly starting sensor commands.
+It requires a two-second stable orientation and enforces a four-second cooldown
+between rotations, so brief movements while reclining do not flip the screen.
+SensorProxy supplies orientation categories rather than raw tilt angles, so a
+sustained unintended tilt can still rotate it; use the rotation lock below when
+working in a position where you want the screen to stay fixed.
+Duplicate readings cause no display update. It changes only the internal `eDP-*`
+panel's transform, preserving resolution, refresh rate, scale, position, HDR and
+VRR. Touchscreen and pen input receive the same transform and are bound to that
+panel. These input defaults assume the Surface's built-in digitizers; if using an
+external touchscreen or drawing tablet, configure its output/transform explicitly
+with a per-device Hyprland rule. Existing per-device overrides for the Surface's
+own digitizers must also be removed or updated to allow these defaults to apply.
+Disabled or sleeping panels are skipped. Sensor process failures are retried, and
+panel transform changes from a configuration reload are corrected within three
+seconds. The service restarts on failures and prevents duplicate daemon instances.
+Hyprland performs the display transition; this does not add an animated rotation
+or guarantee a flicker-free modeset on every driver.
+
+Temporarily lock the current orientation, then unlock:
+
+```sh
+touch "$XDG_RUNTIME_DIR/surface11-rotation-inhibited"
+rm -f "$XDG_RUNTIME_DIR/surface11-rotation-inhibited"
+```
+
+Inspect or stop rotation:
+
+```sh
+systemctl --user status surface11-autorotate.service
+journalctl --user -u surface11-autorotate.service -f
+systemctl --user stop surface11-autorotate.service
+```
+
+To remove auto-start, remove the `SURFACE11_AUTOROTATE_BEGIN` through
+`SURFACE11_AUTOROTATE_END` block from your Lua config and run
+`systemctl --user disable --now surface11-autorotate.service`. Log out/in to
+restore your configured display and input defaults.
+
+Validation without changing the desktop:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_autorotate.py'
+```
+
+On the Surface, run `monitor-sensor --accel` to verify all four orientations,
+then check each corner with touch and pen in each orientation. Check rapid
+back-and-forth tilts, lock/unlock, suspend/resume, a Hyprland reload, a new login,
+and an external monitor. Software tests cannot verify physical sensor mounting,
+digitizer calibration, or the driver's modeset smoothness.
