@@ -8,7 +8,6 @@ import shutil
 import struct
 import subprocess
 import time
-import sys
 
 
 def typing_keyboard(device):
@@ -62,33 +61,32 @@ def set_dock_tablet_mode(tablet):
         return False
 
 
-def show_keyboard():
-    """Retry until Squeekboard owns its bus name; process start is not readiness."""
+def set_cursor_mode(tablet):
     try:
-        result = subprocess.run(
-            ['busctl', '--user', 'call', 'sm.puri.OSK0', '/sm/puri/OSK0',
-             'sm.puri.OSK0', 'SetVisible', 'b', 'true'],
-            capture_output=True, text=True, timeout=2)
-        return result.returncode == 0
+        result = subprocess.run(['hyprctl', 'eval',
+                                 'hl.config({cursor={invisible=' + ('true' if tablet else 'false') + '}})'],
+                                text=True, capture_output=True, timeout=3)
+        return result.returncode == 0 and result.stdout.strip() == 'ok'
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
-def request_keyboard():
-    if not needs_keyboard():
-        raise SystemExit('The on-screen keyboard is only available in tablet mode.')
-    request = Path(os.environ['XDG_RUNTIME_DIR']) / 'surface11-keyboard-show'
-    request.touch(mode=0o600)
-    subprocess.run(['systemctl', '--user', 'start', 'surface11-touch.service'], check=True)
+def stop_process(process):
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=4)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
 def main():
     child = None
+    effects = None
     stopped = False
     dock_check = 0.0
     last_mode = None
-    show_pending = False
-    request = Path(os.environ['XDG_RUNTIME_DIR']) / 'surface11-keyboard-show'
 
     def stop(*_):
         nonlocal stopped
@@ -106,13 +104,18 @@ def main():
                 dock_check = 0.0
                 last_mode = wanted
             if now >= dock_check:
-                if set_dock_tablet_mode(wanted):
+                cursor_ok = set_cursor_mode(wanted)
+                if set_dock_tablet_mode(wanted) and cursor_ok:
                     dock_check = now + 60
                 else:
                     dock_check = now + 5
-            if request.exists():
-                request.unlink(missing_ok=True)
-                show_pending = wanted
+            if effects and effects.poll() is not None:
+                effects = None
+            if wanted and effects is None:
+                effects = subprocess.Popen(['qs', '-p', str(Path(__file__).with_name('touch-effects.qml'))])
+            elif not wanted and effects is not None:
+                stop_process(effects)
+                effects = None
             if not shutil.which('squeekboard'):
                 time.sleep(1)
                 continue
@@ -124,36 +127,17 @@ def main():
                 subprocess.run(['gsettings', 'set', 'org.gnome.desktop.a11y.applications',
                                 'screen-keyboard-enabled', 'true'], check=True)
                 child = subprocess.Popen(['squeekboard'])
-                show_pending = True
                 print('Tablet: desktop keyboard enabled', flush=True)
             elif not wanted and child is not None:
-                child.terminate()
-                try:
-                    child.wait(timeout=4)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
+                stop_process(child)
                 child = None
-                show_pending = False
                 print('Hardware keyboard: desktop keyboard disabled', flush=True)
-            if child and show_pending and show_keyboard():
-                show_pending = False
-                print('Desktop keyboard shown', flush=True)
             time.sleep(1)
     finally:
-        if child and child.poll() is None:
-            child.terminate()
-            try:
-                child.wait(timeout=4)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+        stop_process(effects)
+        stop_process(child)
+        set_cursor_mode(False)
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--show']:
-        request_keyboard()
-    elif sys.argv[1:]:
-        raise SystemExit('Usage: surface11-touch.py [--show]')
-    else:
-        main()
+    main()

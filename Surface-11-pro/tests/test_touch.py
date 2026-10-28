@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import subprocess
-import os
 from unittest.mock import MagicMock
 
 spec = importlib.util.spec_from_file_location('touch', Path(__file__).parents[1] / 'input/surface11-touch.py')
@@ -73,59 +72,47 @@ class DockMode(unittest.TestCase):
             self.assertFalse(touch.set_dock_tablet_mode(True))
 
 
+class CursorMode(unittest.TestCase):
+    def test_uses_lua_and_validates_reply(self):
+        with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'ok\n')) as run:
+            self.assertTrue(touch.set_cursor_mode(True))
+            self.assertEqual(run.call_args.args[0][1], 'eval')
+            self.assertIn('invisible=true', run.call_args.args[0][2])
+        with patch.object(touch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'unknown request')):
+            self.assertFalse(touch.set_cursor_mode(False))
+
+
 class KeyboardStartup(unittest.TestCase):
-    def exercise(self, modes, manual=False):
-        with tempfile.TemporaryDirectory() as tmp:
-            request = Path(tmp) / 'surface11-keyboard-show'
-            if manual:
-                request.touch()
-            child = MagicMock()
-            child.poll.return_value = None
-            with patch.dict(os.environ, XDG_RUNTIME_DIR=tmp), \
-                 patch.object(touch, 'needs_keyboard', side_effect=modes), \
-                 patch.object(touch, 'set_dock_tablet_mode', return_value=True), \
-                 patch.object(touch.shutil, 'which', return_value='/usr/bin/squeekboard'), \
-                 patch.object(touch.subprocess, 'Popen', return_value=child) as start, \
-                 patch.object(touch.subprocess, 'run') as settings, \
-                 patch.object(touch, 'show_keyboard', side_effect=[False, True]) as show, \
-                 patch.object(touch.time, 'sleep', side_effect=[None] * (len(modes)-1) + [KeyboardInterrupt]):
-                with self.assertRaises(KeyboardInterrupt):
-                    touch.main()
-                start.assert_called_once_with(['squeekboard'])
-                self.assertEqual(settings.call_args.args[0][-2:], ['screen-keyboard-enabled', 'true'])
-                self.assertEqual(show.call_count, 2)
-                self.assertFalse(request.exists())
-            child.terminate.assert_called_once()
+    def test_focus_controls_keyboard_and_cursor_tracks_mode(self):
+        keyboard, effects = MagicMock(), MagicMock()
+        keyboard.poll.return_value = effects.poll.return_value = None
+        with patch.object(touch, 'needs_keyboard', side_effect=[True, True, False]), \
+             patch.object(touch, 'set_dock_tablet_mode', return_value=True), \
+             patch.object(touch, 'set_cursor_mode', return_value=True) as cursor, \
+             patch.object(touch.shutil, 'which', return_value='/usr/bin/squeekboard'), \
+             patch.object(touch.subprocess, 'Popen', side_effect=[effects, keyboard]) as start, \
+             patch.object(touch.subprocess, 'run') as settings, \
+             patch.object(touch.time, 'sleep', side_effect=[None, None, KeyboardInterrupt]):
+            with self.assertRaises(KeyboardInterrupt):
+                touch.main()
+            self.assertEqual(start.call_args_list[1].args[0], ['squeekboard'])
+            self.assertEqual(settings.call_args.args[0][-2:], ['screen-keyboard-enabled', 'true'])
+            # Never force visibility; native text-input activation owns show/hide.
+            self.assertFalse(any('SetVisible' in call.args[0] for call in settings.call_args_list))
+            self.assertEqual([call.args[0] for call in cursor.call_args_list], [True, False, False])
+        keyboard.terminate.assert_called_once()
+        effects.terminate.assert_called_once()
 
-    def test_tablet_enables_keyboard_retries_show_then_stops_on_attach(self):
-        self.exercise([True, True, False])
-
-    def test_manual_show_works_in_tablet_mode(self):
-        self.exercise([True, True], manual=True)
-
-    def test_manual_launcher_rejects_hardware_keyboard(self):
+    def test_desktop_never_starts_keyboard_or_feedback(self):
         with patch.object(touch, 'needs_keyboard', return_value=False), \
-             patch.object(touch.subprocess, 'run') as run:
-            with self.assertRaisesRegex(SystemExit, 'only available in tablet mode'):
-                touch.request_keyboard()
-            run.assert_not_called()
-
-    def test_stale_manual_request_cannot_bypass_tablet_mode(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            request = Path(tmp) / 'surface11-keyboard-show'
-            request.touch()
-            with patch.dict(os.environ, XDG_RUNTIME_DIR=tmp), \
-                 patch.object(touch, 'needs_keyboard', return_value=False), \
-                 patch.object(touch, 'set_dock_tablet_mode', return_value=True), \
-                 patch.object(touch.shutil, 'which', return_value='/usr/bin/squeekboard'), \
-                 patch.object(touch.subprocess, 'Popen') as start, \
-                 patch.object(touch, 'show_keyboard') as show, \
-                 patch.object(touch.time, 'sleep', side_effect=KeyboardInterrupt):
-                with self.assertRaises(KeyboardInterrupt):
-                    touch.main()
-                start.assert_not_called()
-                show.assert_not_called()
-                self.assertFalse(request.exists())
+             patch.object(touch, 'set_dock_tablet_mode', return_value=True), \
+             patch.object(touch, 'set_cursor_mode', return_value=True), \
+             patch.object(touch.shutil, 'which', return_value='/usr/bin/squeekboard'), \
+             patch.object(touch.subprocess, 'Popen') as start, \
+             patch.object(touch.time, 'sleep', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                touch.main()
+            start.assert_not_called()
 
 
 if __name__ == '__main__':

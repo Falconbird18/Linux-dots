@@ -8,8 +8,18 @@ hl.config({
     gestures = { workspace_swipe_touch = false },
     cursor = { hide_on_touch = false },
 })
--- Also works in clients without Wayland text-input support.
-hl.bind("SUPER + CTRL + K", hl.dsp.exec_cmd("python3 \"$HOME/.local/lib/surface11/touch.py\" --show"), { description = "Show touch keyboard" })
+-- Remove the old forced-show shortcut; text-input focus owns keyboard visibility.
+hl.unbind("SUPER + CTRL + K")
+local observer = os.getenv("HOME") .. "/.local/lib/surface11/touch-observer.so"
+local file = io.open(observer, "r")
+if file then
+    file:close()
+    hl.plugin.load(observer)
+end
 hl.on("hyprland.start", function()
     hl.exec_cmd("sh -c 'systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_RUNTIME_DIR && systemctl --user restart surface11-touch.service'")
+end)
+
+hl.on("config.reloaded", function()
+    hl.exec_cmd("systemctl --user restart surface11-touch.service")
 end)

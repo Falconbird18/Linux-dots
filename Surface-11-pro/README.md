@@ -232,46 +232,67 @@ The default installer also runs `input/setup-touch.sh`. To apply just these chan
 bash Surface-11-pro/install-surface11.sh touch
 ```
 
-This installs Squeekboard from Arch, enables a session-scoped `surface11-touch`
-user service and maps touch and pen input to `eDP-1`. Touchscreen workspace
-edge gestures are disabled: enabling them caused taps to stop registering on
-the tested Hyprland build. The pointer remains visible. Dux dock auto-hide
-is enabled with a usable typing keyboard and disabled in tablet mode, so
-the dock stays reachable without hovering. Auto-rotation continues to
-manage touch/pen transforms. The setup backs up Hyprland before adding its
-include and uses Dux IPC to preserve other personal shell settings.
+This installs Squeekboard, Quickshell and build tools, enables the session-scoped
+`surface11-touch` service, and maps the built-in touch and pen input to `eDP-1`.
+Auto-rotation continues to manage their transforms. The service checks hardware
+once per second, ignoring keyd virtual devices, power/volume buttons and
+consumer-control interfaces. A usable typing keyboard disables tablet behavior;
+folding the Surface cover also works when the session can query its switch.
 
-The service checks hardware once per second. It ignores virtual keyd devices,
-power/volume buttons and consumer-control interfaces. It enables Squeekboard
-when no real typing keyboard is connected, and stops it when one reconnects.
-Folding the Surface keyboard back also works when the session has permission
-to query the tablet switch; an external typing keyboard still suppresses it.
-The installer enables the accessibility switch required by Squeekboard and
-sets a US layout only if no layouts are configured. On tablet entry the service
-starts the keyboard, waits for its D-Bus interface, and explicitly shows it;
-this also works in apps that never request a Wayland input method. Compatible
-Wayland text fields can subsequently show/hide it automatically. For
-clients without text-input support, launch **Show Touch Keyboard** from Dux
-(or pin that launcher to the dock), or press **Super+Ctrl+K**. The launcher
-requests the keyboard through the service, starts it if needed, and waits for
-readiness before showing it. Both the launcher and service enforce tablet mode:
-with a usable typing keyboard attached, requests are rejected and the keyboard
-process is stopped. Text-field detection is client-dependent, particularly for
-XWayland.
+In tablet mode:
 
-Dux's secure lock screen uses its own keyboard: tap the keyboard icon beside
-the password field. A desktop layer keyboard cannot replace the secure lock UI.
+- Squeekboard starts hidden and follows native Wayland text-input activation.
+  Tap a text field to show it; leave text entry (tap outside or close the field)
+  to hide it. Pressing Enter while the field retains focus may keep it open.
+- The mouse cursor is hidden and the Dux dock stays visible. Reconnecting the
+  keyboard restores the cursor and dock auto-hide, and stops the desktop keyboard.
+- Small blue touch rings track contacts and fade when released. Their overlay
+  has an empty input region, so it cannot capture taps or take keyboard focus.
+- Swipe **three fingers left** for the next workspace, **right** for the previous
+  workspace. Fingers must arrive together and move horizontally roughly 12% of
+  the screen. Small movements, vertical swipes, pinches, and four-finger gestures
+  do not switch workspaces. Each gesture switches once until all fingers lift.
 
-Check `systemctl --user status surface11-touch.service` and
-`journalctl --user -u surface11-touch.service`. The service controls the dock
-even if Squeekboard is missing.
-`input/setup-touch.sh --configure-only` prepares
-user files without attempting package installation; it exits with a reminder
-if Squeekboard is missing. Re-running the normal `touch` command installs the
-package and starts the service. Test detach/reattach, text entry, lock-screen
-entry, normal taps, dock visibility, and rotated touch alignment on the physical
-device.
+The installer enables Squeekboard's required accessibility setting and sets a US
+layout only if no input layouts exist. It also enables native Wayland IME v3 in
+Chromium/Electron flag files, preserving other flags. Reopen those apps afterward.
+Automatic text-field detection requires client support; XWayland and apps that
+never expose Wayland text-input focus cannot request this keyboard. The old
+forced-show launcher and shortcut are removed. Dux's secure lock screen uses its
+own keyboard button beside the password field.
+
+`input/touch-observer.cpp` is a small local Hyprland plugin. It only forwards
+built-in touchscreen events to a private user-runtime socket; it never grabs raw
+input devices or cancels/modifies Hyprland's touch events. A tablet-only Quickshell
+process draws the rings and recognizes swipes. Applications still receive their
+normal touch stream, including multi-finger input. Locked sessions do not forward
+events or switch workspaces. The built-in **edge** workspace gesture remains
+disabled because it previously broke taps on this Hyprland build.
+
+The observer is compiled against installed Hyprland headers and rejects a
+compositor/API hash mismatch. After upgrading Hyprland, log into the matching new
+version and rerun the touch installer to rebuild it. Libraries are replaced
+atomically so rerunning setup cannot truncate a loaded plugin. Build products
+are installed under `~/.local/lib/surface11/`, outside this source folder. The
+installer backs up Hyprland before adding the include and updates Dux through IPC.
+
+Check `systemctl --user status surface11-touch.service`,
+`journalctl --user -u surface11-touch.service`, `hyprctl plugin list`, and
+`hyprctl configerrors`. `input/setup-touch.sh --configure-only` updates user files
+and compiles the observer using already installed dependencies; the normal touch
+command also installs missing packages. A configuration reload restarts the
+helper so cursor, keyboard and feedback state follow the current hardware mode.
+
+Hardware-free checks:
+
+```sh
+python3 -B -m unittest discover -s tests -p 'test_*.py'
+qmllint -I /usr/lib/qt6/qml input/touch-effects.qml
+```
+
+On the actual Surface, test text-field entry/exit, ordinary taps, touch rings,
+three-finger swipes, all orientations, keyboard reconnect, and lock/unlock.
 
 References: [Squeekboard](https://world.pages.gitlab.gnome.org/Phosh/squeekboard/),
-[Squeekboard visibility controls](https://world.pages.gitlab.gnome.org/Phosh/squeekboard/hacking.html),
-and [Hyprland input/gesture options](https://wiki.hypr.land/Configuring/Basics/Variables/).
+[Chromium Wayland input switches](https://chromium.googlesource.com/chromium/src/+/lkgr/ui/ozone/public/ozone_switches.cc),
+and [Hyprland configuration](https://wiki.hypr.land/Configuring/Basics/Variables/).
