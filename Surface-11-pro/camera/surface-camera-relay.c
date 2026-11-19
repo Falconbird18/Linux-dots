@@ -67,7 +67,12 @@ static gboolean usage_event(gint fd, GIOCondition condition, gpointer data) {
             received = TRUE;
         }
     }
-    if (errno != EAGAIN && errno != EINTR) { fail("Cannot read loopback client events"); return G_SOURCE_CONTINUE; }
+    /* V4L2's nonblocking event queue returns ENOENT when drained, unlike
+     * read()/DQBUF's EAGAIN. Neither means that the device disappeared. */
+    if (errno != ENOENT && errno != EAGAIN && errno != EINTR) {
+        g_printerr("Surface %s loopback events: %s\n", camera->name, g_strerror(errno));
+        fail("Cannot read loopback client events"); return G_SOURCE_CONTINUE;
+    }
     if (received) set_demand(camera, count != 0);
     return G_SOURCE_CONTINUE;
 }

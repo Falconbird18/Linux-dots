@@ -52,7 +52,9 @@ def routing_errors(graph):
         if len(duplicates) != 1:
             errors.append(f'Expected one public route for video{number}, found {len(duplicates)}')
     for props in nodes:
-        if props.get('node.name') in BACKENDS:
+        raw_ipu7 = (props.get('api.v4l2.cap.driver') == 'isys'
+                    and props.get('api.v4l2.cap.card') == 'ipu7')
+        if props.get('node.name') in BACKENDS or raw_ipu7:
             errors.append(f'Native backend exposed to ordinary apps: {props["node.name"]}')
     return errors
 
