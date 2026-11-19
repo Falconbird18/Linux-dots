@@ -16,8 +16,23 @@ esac
 command -v hyprctl >/dev/null || { echo 'Install Hyprland first.' >&2; exit 1; }
 config="$config_home/hypr/hyprland.lua"
 [[ -f $config ]] || { echo "Expected Lua Hyprland configuration: $config" >&2; exit 1; }
-sudo pacman -S --needed iio-sensor-proxy python coreutils
-sudo systemctl start iio-sensor-proxy.service
+if ! pacman -Q iio-sensor-proxy python coreutils >/dev/null 2>&1; then
+  sudo pacman -S --needed iio-sensor-proxy python coreutils
+fi
+# The Surface SAM HID transport cannot fetch input reports on demand. With the
+# firmware's on-change threshold, stationary sensors time out and supply bogus
+# zeroes to SensorProxy's polling fallback. Install this before starting/reprobing
+# SensorProxy so it discovers a continuously reporting, buffered accelerometer.
+sudo install -Dm644 "$SCRIPT_DIR/81-surface11-accelerometer.rules" /etc/udev/rules.d/81-surface11-accelerometer.rules
+sudo udevadm control --reload-rules
+if [[ $(cat /sys/class/dmi/id/sys_vendor 2>/dev/null) == 'Microsoft Corporation' &&
+      $(cat /sys/class/dmi/id/product_name 2>/dev/null) == 'Surface Pro for Business 11th Edition with Intel' ]]; then
+  sudo udevadm trigger --settle --action=change --subsystem-match=iio --attr-match=name=accel_3d
+  sudo systemctl restart iio-sensor-proxy.service
+  echo 'Applied Surface Pro 11 Intel continuous accelerometer reporting fix.'
+elif ! systemctl is-active --quiet iio-sensor-proxy.service; then
+  sudo systemctl start iio-sensor-proxy.service
+fi
 install -Dm644 "$SCRIPT_DIR/surface11-autorotate.py" "$HOME/.local/lib/surface11/autorotate.py"
 mkdir -p "$unit_dir"
 cat > "$unit_dir/surface11-autorotate.service" <<'UNIT'
@@ -43,17 +58,26 @@ from pathlib import Path
 import sys
 p = Path(sys.argv[1])
 s = p.read_text()
-marker = '-- SURFACE11_AUTOROTATE_BEGIN'
-if marker not in s:
-    p.with_name(p.name + '.before-surface11-rotation').write_text(s)
-    with p.open('a') as f:
-        f.write('''
--- SURFACE11_AUTOROTATE_BEGIN
+begin = '-- SURFACE11_AUTOROTATE_BEGIN'
+end = '-- SURFACE11_AUTOROTATE_END'
+hook = begin + '''
 hl.on("hyprland.start", function()
-    hl.exec_cmd("sh -c 'systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_RUNTIME_DIR && systemctl --user restart surface11-autorotate.service'")
+    hl.exec_cmd("sh -c 'systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE XDG_RUNTIME_DIR && systemctl --user restart surface11-autorotate.service'")
 end)
--- SURFACE11_AUTOROTATE_END
-''')
+
+hl.on("config.reloaded", function()
+    hl.exec_cmd("systemctl --user try-restart surface11-autorotate.service")
+end)
+''' + end
+if begin in s:
+    first = s.index(begin)
+    last = s.index(end, first) + len(end)
+    updated = s[:first] + hook + s[last:]
+else:
+    p.with_name(p.name + '.before-surface11-rotation').write_text(s)
+    updated = s + '\n' + hook + '\n'
+if updated != s:
+    p.write_text(updated)
 PY
 systemctl --user daemon-reload
 systemctl --user enable surface11-autorotate.service

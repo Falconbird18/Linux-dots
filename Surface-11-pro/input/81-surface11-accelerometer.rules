@@ -1,0 +1,5 @@
+# Surface SAM HID cannot fetch an input report on demand. On-change reporting
+# can leave stationary-device sysfs reads waiting until they return bogus zeroes.
+# Request continuous accelerometer reports so SensorProxy can use its IIO buffer.
+# Keep this limited to the tested Surface Pro 11 Intel model and sensor hub.
+ACTION!="remove", SUBSYSTEM=="iio", KERNEL=="iio:device*", ATTR{[dmi/id]sys_vendor}=="Microsoft Corporation", ATTR{[dmi/id]product_name}=="Surface Pro for Business 11th Edition with Intel", KERNELS=="0019:045E:0C9C.*", ATTR{name}=="accel_3d", ATTR{in_accel_hysteresis}="0"

@@ -1,7 +1,5 @@
 """Run with python3 -m unittest discover -s Surface-11-pro/tests -p 'test_autorotate.py'."""
 import importlib.util
-import math
-import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -11,143 +9,148 @@ rotation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rotation)
 
 
-class AngleTests(unittest.TestCase):
-    @staticmethod
-    def vector(degrees):
-        radians = math.radians(degrees)
-        return (9.80665 * math.sin(radians), -9.80665 * math.cos(radians), 0)
+class SensorTests(unittest.TestCase):
+    def test_initial_and_changed_sensor_messages(self):
+        state = rotation.SensorState()
+        for label, transform in rotation.TRANSFORMS.items():
+            state.feed(f'=== Has accelerometer (orientation: {label}, tilt: vertical)')
+            self.assertEqual(state.transform(), transform)
+            state.feed(f'Accelerometer orientation changed: {label}')
+            self.assertEqual(state.transform(), transform)
+        state.feed('Accelerometer orientation changed: undefined')
+        self.assertIsNone(state.transform())
 
-    def test_startup_latches_without_rotating(self):
-        gate = rotation.AngleGate()
-        self.assertFalse(gate.allows(self.vector(40)))
-        self.assertFalse(gate.allows(self.vector(64.9)))
-        self.assertTrue(gate.allows(self.vector(65)))
+    def test_flat_device_holds_until_raised(self):
+        state = rotation.SensorState()
+        state.feed('=== Has accelerometer (orientation: normal, tilt: face-up)')
+        state.feed('Accelerometer orientation changed: left-up')
+        self.assertIsNone(state.transform())
+        state.feed('Tilt changed: tilted-up')
+        self.assertEqual(state.transform(), 1)
+        state.feed('Tilt changed: vertical')
+        self.assertEqual(state.transform(), 1)
+        state.feed('Tilt changed: face-down')
+        self.assertIsNone(state.transform())
 
-    def test_threshold_both_directions_and_no_reference_drift(self):
-        gate = rotation.AngleGate()
-        gate.reset(self.vector(0))
-        for angle in (1, 10, 20, 24.99, -24.99, 0):
-            self.assertFalse(gate.allows(self.vector(angle)))
-        for angle in (25, -25, 90, 180):
-            self.assertTrue(gate.allows(self.vector(angle)))
+    def test_disconnect_clears_cached_orientation_and_tilt(self):
+        for line in ('--- Accelerometer disappeared', '=== No accelerometer',
+                     '--- iio-sensor-proxy vanished, waiting for it to appear'):
+            with self.subTest(line=line):
+                state = rotation.SensorState()
+                state.feed('=== Has accelerometer (orientation: right-up, tilt: vertical)')
+                state.feed(line)
+                self.assertIsNone(state.transform())
+                state.feed('=== Has accelerometer (orientation: left-up)')
+                self.assertIsNone(state.transform())
+                state.feed('Tilt changed: vertical')
+                self.assertEqual(state.transform(), 1)
 
-    def test_rotation_resets_reference(self):
-        gate = rotation.AngleGate()
-        gate.reset(self.vector(70))
-        self.assertFalse(gate.allows(self.vector(80)))
-        self.assertFalse(gate.allows(self.vector(50)))
-        self.assertTrue(gate.allows(self.vector(45)))
+    def test_flat_or_unknown_tilt_blocks_rotation(self):
+        for tilt in (None, 'undefined', 'face-up', 'face-down', 'unknown'):
+            with self.subTest(tilt=tilt):
+                state = rotation.SensorState()
+                suffix = f', tilt: {tilt}' if tilt else ''
+                state.feed(f'=== Has accelerometer (orientation: left-up{suffix})')
+                self.assertIsNone(state.transform())
 
-    def test_dropping_below_threshold_cancels_hold(self):
-        gate, debounce = rotation.AngleGate(), rotation.Debounce()
-        gate.reset(self.vector(0))
-        for now, angle in ((0, 30), (1.9, 20), (2, 30)):
-            debounce.feed(1 if gate.allows(self.vector(angle)) else None, now)
-        self.assertFalse(debounce.ready(3.9))
-        self.assertTrue(debounce.ready(4.1))
-
-    def test_axis_mounting_does_not_change_angle(self):
-        a, b = self.vector(0), self.vector(24)
-        for transform in (lambda v: v, lambda v: (-v[2], v[0], -v[1])):
-            gate = rotation.AngleGate()
-            gate.reset(transform(a))
-            self.assertFalse(gate.allows(transform(b)))
-            self.assertTrue(gate.allows(transform(self.vector(26))))
-
-    def test_scaled_raw_values_and_invalid_samples(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            device = Path(tmp) / 'iio:device7'
-            device.mkdir()
-            for axis, raw in zip('xyz', (0, -1000, 0)):
-                (device / f'in_accel_{axis}_raw').write_text(str(raw))
-            (device / 'in_accel_scale').write_text('0.00980665')
-            (device / 'in_accel_offset').write_text('0')
-            sensor = rotation.Accelerometer(Path(tmp))
-            self.assertAlmostEqual(sensor.read()[1], -9.80665)
-            (device / 'in_accel_y_raw').write_text('0')
-            with self.assertRaises(RuntimeError):
-                sensor.read()
-            (device / 'in_accel_y_raw').write_text('nan')
-            with self.assertRaises(RuntimeError):
-                sensor.read()
-
-    def test_missing_sensor_does_not_fall_back_to_labels(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(RuntimeError):
-                rotation.Accelerometer(Path(tmp))
+    def test_normal_viewing_angles_allow_all_orientations(self):
+        for tilt in ('vertical', 'tilted-up', 'tilted-down'):
+            for label, transform in rotation.TRANSFORMS.items():
+                with self.subTest(tilt=tilt, label=label):
+                    state = rotation.SensorState()
+                    state.feed(f'=== Has accelerometer (orientation: {label}, tilt: {tilt})')
+                    self.assertEqual(state.transform(), transform)
 
 
 class RotationTests(unittest.TestCase):
     def test_no_rotation_without_reading(self):
         self.assertFalse(rotation.Debounce().ready(100))
 
-    def test_jitter_restarts_settling(self):
-        d = rotation.Debounce()
-        d.feed(1, 0)
-        d.feed(0, .3)
-        d.feed(1, .5)
-        self.assertFalse(d.ready(.8))
-        self.assertFalse(d.ready(2.4))
-        self.assertTrue(d.ready(2.6))
+    def test_jitter_and_sensor_loss_restart_settling(self):
+        debounce = rotation.Debounce()
+        for now, value in ((0, 1), (0.3, 0), (0.5, 1), (1, None), (1.5, 1)):
+            debounce.feed(value, now)
+        self.assertFalse(debounce.ready(2.4))
+        self.assertTrue(debounce.ready(2.5))
 
     def test_duplicate_readings_do_not_delay_rotation(self):
-        d = rotation.Debounce()
-        d.feed(1, 0)
-        d.feed(1, .4)
-        self.assertFalse(d.ready(.5))
-        self.assertTrue(d.ready(2.1))
+        debounce = rotation.Debounce()
+        debounce.feed(1, 0)
+        debounce.feed(1, 0.4)
+        self.assertFalse(debounce.ready(0.5))
+        self.assertTrue(debounce.ready(1))
 
-    def test_cooldown(self):
-        d = rotation.Debounce()
-        d.last = 1
-        d.feed(2, 1.1)
-        self.assertFalse(d.ready(1.8))
-        self.assertFalse(d.ready(4.9))
-        self.assertTrue(d.ready(5.1))
-
-    def test_brief_bed_movements_never_rotate(self):
-        d = rotation.Debounce()
-        # Each accidental threshold crossing lasts longer than the old 450 ms.
-        for now, value in ((0, 0), (3, 1), (4.2, 0), (6, 1), (7.5, 0)):
-            d.feed(value, now)
+    def test_brief_movements_never_rotate(self):
+        debounce = rotation.Debounce()
+        for now, value in ((0, 0), (3, 1), (3.6, 0), (6, 1), (6.8, 0)):
+            debounce.feed(value, now)
             if value == 1:
-                self.assertFalse(d.ready(now + 1.0))
-        self.assertTrue(d.ready(9.6))
-        self.assertEqual(d.pending, 0)
+                self.assertFalse(debounce.ready(now + 0.5))
+        self.assertTrue(debounce.ready(7.8))
+        self.assertEqual(debounce.pending, 0)
 
-    def test_deliberate_rotation_after_hold_and_cooldown(self):
-        d = rotation.Debounce()
-        d.last = 0
-        d.feed(1, 1)
-        self.assertFalse(d.ready(3.5))
-        self.assertTrue(d.ready(4.1))
-        d.last = 4.1
-        d.feed(0, 4.2)
-        self.assertFalse(d.ready(6.3))
-        self.assertTrue(d.ready(8.2))
+    def test_subsecond_threshold_crossing_is_ignored(self):
+        debounce = rotation.Debounce()
+        debounce.feed(1, 0)
+        self.assertFalse(debounce.ready(0.9))
+        debounce.feed(0, 0.9)
+        self.assertEqual(debounce.pending, 0)
 
-    def test_initial_and_changed_sensor_messages(self):
-        for value in rotation.TRANSFORMS:
-            for message in (f'=== Has accelerometer (orientation: {value})',
-                            f'    Accelerometer orientation changed: {value}'):
-                self.assertEqual(rotation.ORIENTATION.search(message)[1], value)
-        self.assertIsNone(rotation.ORIENTATION.search('Accelerometer orientation changed: undefined'))
+    def test_successful_rotation_prevents_immediate_reversal(self):
+        debounce = rotation.Debounce()
+        debounce.feed(1, 0)
+        self.assertTrue(debounce.ready(1))
+        debounce.applied(1)
+        debounce.feed(0, 1.1)
+        self.assertFalse(debounce.ready(2.1))
+        self.assertFalse(debounce.ready(2.9))
+        self.assertTrue(debounce.ready(3))
+
+    def test_flat_tilt_cancels_a_pending_rotation(self):
+        state = rotation.SensorState()
+        debounce = rotation.Debounce()
+        for now, line in (
+            (0, '=== Has accelerometer (orientation: left-up, tilt: vertical)'),
+            (0.9, 'Tilt changed: face-up'),
+            (10, 'Tilt changed: vertical'),
+        ):
+            state.feed(line)
+            debounce.feed(state.transform(), now)
+            self.assertFalse(debounce.ready(now))
+        self.assertFalse(debounce.ready(10.9))
+        self.assertTrue(debounce.ready(11))
 
     @patch.object(rotation, 'hypr', return_value='ok\n')
     def test_only_transform_changes_and_inputs_follow(self, ipc):
-        rotation.apply_rotation('eDP-1', 3)
+        rotation.apply_rotation('eDP-1', 3, True)
         command, lua = ipc.call_args.args
         self.assertEqual(command, 'eval')
         self.assertIn('hl.monitor({output="eDP-1", transform=3})', lua)
         self.assertIn('touchdevice={output="eDP-1", transform=3}', lua)
         self.assertIn('tablet={output="eDP-1", transform=3}', lua)
-        for setting in ('mode=', 'scale=', 'position=', 'vrr=', 'bitdepth='):
-            self.assertNotIn(setting, lua)
+
+    @patch.object(rotation, 'hypr')
+    def test_startup_syncs_inputs_even_when_display_already_matches(self, ipc):
+        ipc.side_effect = ['[{"name":"eDP-1","transform":3}]', 'ok',
+                           '[{"name":"eDP-1","transform":3}]']
+        applied = rotation.reconcile_rotation(3, None)
+        self.assertEqual(applied, ('eDP-1', 3))
+        lua = ipc.call_args.args[1]
+        self.assertNotIn('hl.monitor', lua)
+        self.assertIn('touchdevice={output="eDP-1", transform=3}', lua)
+        rotation.reconcile_rotation(3, applied)
+        self.assertEqual(ipc.call_count, 3)
+
+    @patch.object(rotation, 'hypr', return_value='[{"name":"HDMI-A-1","transform":0},'
+                                                   '{"name":"eDP-1","dpmsStatus":false}]')
+    def test_ignores_external_and_sleeping_panels(self, ipc):
+        self.assertIsNone(rotation.reconcile_rotation(1, None))
+        ipc.assert_called_once_with('-j', 'monitors')
 
     @patch.object(rotation, 'hypr', return_value='error: invalid configuration')
     def test_ipc_failure_is_not_recorded_as_success(self, _):
         with self.assertRaises(RuntimeError):
-            rotation.apply_rotation('eDP-1', 1)
+            rotation.apply_rotation('eDP-1', 1, True)
 
 
 if __name__ == '__main__':
