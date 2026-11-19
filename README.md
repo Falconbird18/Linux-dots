@@ -120,14 +120,30 @@ git pull --ff-only
 Choose **Sync configuration only** and **Keep this computer’s layout**. Package
 installation, services, keyd and plugin scanning are skipped. Select the saved
 device profile in the Display step whenever you want to restore those settings.
-This is a one-way checkout-to-home sync; copy intended changes made by apps in
-your home directory back into the repository deliberately before sharing them.
-The installer never commits, pushes or changes your Git checkout automatically.
 
-Existing directories are merged; unrelated files are retained. Replaced files
-and symlinks are backed up under
+The installer links `~/.config/hypr/dms` to `.config/hypr/dms` in the checkout.
+When DMS saves a Hyprland setting, its Lua file is updated directly in the
+checkout. Review those edits with `git diff -- .config/hypr/dms` and commit the
+ones you want to share. Display changes go to the Git-ignored `outputs.lua`,
+so each laptop should use its own checkout. The Display step seeds that file
+from the live layout or the selected profile.
+
+On first sync, the checkout supplies shared files that exist in both places.
+The previous live directory is backed up, and files present only in the live
+directory are carried forward. Review any live edits you want to keep before
+syncing, including local changes to `hyprland.lua`, which is installed by copy.
+
+To share DMS shell preferences too, put the keys you want to share in
+`.config/dms/config.d/00-shared.json` in the checkout, then run the installer
+and restart DMS. The installer links the `config.d` directory. DMS saves edits
+to keys defined in the drop-in back to that file and uses its local
+`settings.json` for keys absent from the drop-ins. Later drop-ins take
+precedence. Review any machine-specific values before committing.
+
+The installer copies other configurations and retains unrelated files.
+Replaced files and symlinks are backed up under
 `${XDG_STATE_HOME:-~/.local/state}/dotfiles/backups`; the location is printed.
-Identical files are skipped. Config paths respect `XDG_CONFIG_HOME` and
+`./install.sh --dry-run` previews the sync. Config paths respect `XDG_CONFIG_HOME` and
 `XDG_DATA_HOME`. Selected wallpapers go to
 `${XDG_DATA_HOME:-~/.local/share}/backgrounds/Tempora`. Keyd's previous system
 configuration is backed up separately. Restart affected apps or log in again;
