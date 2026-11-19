@@ -62,6 +62,18 @@ balanced = process('balanced', 'front', raw)[::2]
 # A spatial filter must materially reduce seeded noise, without changing exposure.
 assert statistics.pvariance(balanced) < statistics.pvariance(detail) * 0.35
 assert abs(statistics.fmean(balanced) - statistics.fmean(detail)) < 1
+natural = process('natural', 'front', raw)[::2]
+assert natural == balanced, 'Natural must retain the proven luminance denoise'
+# A one-chroma-pixel color feature must survive natural but be removed by the
+# old all-plane median. Compare the actual output, including I420 -> YUY2.
+chroma = bytearray([128]) * (640 * 360)
+chroma[180 * 640 + 320] = 200
+color_scene = bytes([110]) * (1280 * 720) + chroma + bytes([128]) * (640 * 360)
+natural_color = process('natural', 'front', color_scene)[1::4]
+detail_color = process('detail', 'front', color_scene)[1::4]
+balanced_color = process('balanced', 'front', color_scene)[1::4]
+assert natural_color == detail_color, 'Natural must preserve chroma detail'
+assert max(natural_color) > max(balanced_color) + 20
 # An asymmetric scene must rotate in the pixels, not just in camera metadata.
 scene = bytes(50 if col < 400 and row < 250 else 180
               for row in range(720) for col in range(1280))
@@ -70,7 +82,7 @@ front = process('detail', 'rear', scene, orientation=False)[::2]
 rear = process('detail', 'rear', scene)[::2]
 assert rear == front[::-1], 'Rear pixels must be rotated by 180 degrees'
 # Check RGB -> video range conversion, including the exact rear rotation chain.
-for profile in ['balanced', 'detail']:
+for profile in ['natural', 'balanced', 'detail']:
     for camera in ['front', 'rear']:
         black = process(profile, camera, bytes(1280 * 720 * 3), 'RGB', 'sRGB')[::2]
         white = process(profile, camera, bytes([255]) * (1280 * 720 * 3), 'RGB', 'sRGB')[::2]

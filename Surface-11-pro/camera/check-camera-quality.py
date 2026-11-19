@@ -41,7 +41,9 @@ def capture(source, count=180, deadline=35, warmup=0):
     frames = []
     try:
         if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError('Capture could not start')
+            message = pipeline.get_bus().pop_filtered(Gst.MessageType.ERROR)
+            error = str(message.parse_error()) if message else 'Capture could not start'
+            raise RuntimeError(error)
         start = time.monotonic()
         end = start + deadline
         sink = pipeline.get_by_name('measure')

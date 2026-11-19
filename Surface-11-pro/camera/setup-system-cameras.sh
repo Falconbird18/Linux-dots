@@ -36,6 +36,14 @@ check_routes() {
   fail 'Camera services did not publish the shared devices; inspect the startup error above.'
 }
 case "${1:-check}" in
+  policy)
+    [[ $(cat /sys/class/dmi/id/product_sku) == Surface_Pro_11th_Edition_With_Intel_For_Business_2103 ]] || fail 'Unsupported Surface model.'
+    [[ ! -e $WP_CONF ]] || grep -q 'Managed by surface11-camera' "$WP_CONF" || fail "Unmanaged $WP_CONF"
+    mkdir -p "$(dirname "$WP_CONF")"
+    install -m 644 "$SCRIPT_DIR/../wireplumber/90-surface11-camera.conf" "$WP_CONF"
+    systemctl --user restart wireplumber.service
+    check_routes
+    ;;
   install)
     [[ $(uname -m) == x86_64 &&
        $(cat /sys/class/dmi/id/sys_vendor) == 'Microsoft Corporation' &&
@@ -269,6 +277,10 @@ UNIT
     fi
     systemctl --user disable --now surface11-camera-front-publish.service surface11-camera-rear-publish.service || true
     systemctl --user disable --now surface11-cameras.service || true
+    quality_override="$UNIT_DIR/surface11-cameras.service.d/80-surface11-quality.conf"
+    if [[ -f $quality_override ]] && grep -q '^# Managed by surface11-camera quality$' "$quality_override"; then
+      rm -f "$quality_override"
+    fi
     rm -f "$UNIT_DIR/surface11-cameras.service" "$UNIT_DIR/surface11-camera-front.service" "$UNIT_DIR/surface11-camera-rear.service"
     rm -f "$UNIT_DIR/surface11-camera-front-publish.service" "$UNIT_DIR/surface11-camera-rear-publish.service"
     wp_removed=0
@@ -290,5 +302,5 @@ UNIT
     sudo udevadm control --reload-rules
     echo 'Removed services and boot configuration. Reboot to remove the idle webcam devices. Packages are retained.'
     ;;
-  *) fail 'Usage: bash setup-system-cameras.sh {install|check|quality|undo}' ;;
+  *) fail 'Usage: bash setup-system-cameras.sh {install|policy|check|quality|undo}' ;;
 esac

@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT
-for script in "$ROOT"/*.sh "$ROOT"/{camera,input,kernel}/*.sh; do bash -n "$script"; done
-for profile in balanced detail; do
+for script in "$ROOT"/*.sh "$ROOT"/{bluetooth,camera,input,kernel}/*.sh; do bash -n "$script"; done
+for profile in natural balanced detail; do
   for camera in front rear; do
     SURFACE11_CAMERA_QUALITY=$profile bash "$ROOT/camera/surface-camera-relay.sh" "$camera" --validate
   done

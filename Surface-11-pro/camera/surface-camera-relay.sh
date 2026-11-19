@@ -21,11 +21,13 @@ case "$1" in
   rear) camera='\\_SB_.PC00.I2C3.CAMR'; rotation=rotate-180; width=1920; height=1080 ;;
   *) exit 2 ;;
 esac
-quality=${SURFACE11_CAMERA_QUALITY:-balanced}
+quality=${SURFACE11_CAMERA_QUALITY:-natural}
 case "$quality" in
+  # Keep chroma untouched: filtering subsampled color erases small color features.
+  natural) filter='videoconvert ! video/x-raw,format=I420,colorimetry=bt709 ! videomedian name=surface-denoise filtersize=5 lum-only=true !' ;;
   balanced) filter='videoconvert ! video/x-raw,format=I420,colorimetry=bt709 ! videomedian name=surface-denoise filtersize=5 lum-only=false !' ;;
   detail) filter='' ;;
-  *) echo 'SURFACE11_CAMERA_QUALITY must be balanced or detail' >&2; exit 2 ;;
+  *) echo 'SURFACE11_CAMERA_QUALITY must be natural, balanced or detail' >&2; exit 2 ;;
 esac
 # The CPU ISP crops. A larger 16:9 view followed by downsampling preserves field
 # of view and reduces noise. Shared pixels and both APIs declare limited BT.709.
@@ -40,7 +42,9 @@ Gst.init(None)
 pipeline = Gst.parse_launch_full(sys.argv[1], None, Gst.ParseFlags.FATAL_ERRORS)
 expected = r'\_SB_.PC00.I2C5.CAMF' if sys.argv[2] == 'front' else r'\_SB_.PC00.I2C3.CAMR'
 assert pipeline.get_by_name('surface-sensor').get_property('camera-name') == expected
-assert (pipeline.get_by_name('surface-denoise') is not None) == (sys.argv[3] == 'balanced')
+assert (pipeline.get_by_name('surface-denoise') is not None) == (sys.argv[3] != 'detail')
+if sys.argv[3] != 'detail':
+    assert pipeline.get_by_name('surface-denoise').get_property('lum-only') == (sys.argv[3] == 'natural')
 assert int(pipeline.get_by_name('surface-orientation').get_property('method')) == (0 if sys.argv[2] == 'front' else 2)
 assert Gst.Bin.find_unlinked_pad(pipeline, Gst.PadDirection.SRC) is not None
 pipeline.set_state(Gst.State.NULL)
