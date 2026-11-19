@@ -1,10 +1,9 @@
 --- a/include/linux/platform_data/x86/int3472.h
 +++ b/include/linux/platform_data/x86/int3472.h
-@@ -25,6 +25,8 @@
+@@ -25,6 +25,7 @@
  #define INT3472_GPIO_TYPE_RESET					0x00
  #define INT3472_GPIO_TYPE_POWERDOWN				0x01
  #define INT3472_GPIO_TYPE_STROBE				0x02
-+#define INT3472_GPIO_TYPE_POWER0				0x07
 +#define INT3472_GPIO_TYPE_POWER1				0x08
  #define INT3472_GPIO_TYPE_POWER_ENABLE				0x0b
  #define INT3472_GPIO_TYPE_CLK_ENABLE				0x0c
@@ -22,11 +21,10 @@
  	case INT3472_GPIO_TYPE_DOVDD:
  		*con_id = "dovdd";
  		*gpio_flags = GPIO_ACTIVE_HIGH;
-@@ -257,6 +261,8 @@
+@@ -257,6 +261,7 @@
   * 0x00 Reset
   * 0x01 Power down
   * 0x02 Strobe
-+ * 0x07 Power 0
 + * 0x08 Power 1
   * 0x0b Power enable
   * 0x0c Clock enable

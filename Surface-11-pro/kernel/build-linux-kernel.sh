@@ -2,21 +2,32 @@
 # Build the pinned Surface kernel; do not overwrite the running kernel modules.
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-KERNEL_VERSION="7.2.9"
-CUSTOM_SUFFIX="-surface11-camera1"
+source "$SCRIPT_DIR/version.env"
 KERNEL_RELEASE="$KERNEL_VERSION$CUSTOM_SUFFIX"
-KERNEL_SHA256="b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba"
-WORK_DIR="${SURFACE11_BUILD_DIR:-$HOME/surface-kernel-build}"
+BOOT_STEM="linux-$KERNEL_RELEASE"
+ENTRY_NAME="$KERNEL_RELEASE.conf"
+# Reuse the installed source location; moving it would break DKMS's build link.
+installed_build=$(readlink -f "/usr/lib/modules/$KERNEL_RELEASE/build" 2>/dev/null || true)
+if [[ -z ${SURFACE11_BUILD_DIR:-} && -d $installed_build &&
+      ${installed_build##*/} == "linux-$KERNEL_VERSION-camera1" ]]; then
+    WORK_DIR="${installed_build%/*}"
+else
+    WORK_DIR="${SURFACE11_BUILD_DIR:-$HOME/surface-kernel-build}"
+fi
 KERNEL_DIR="$WORK_DIR/linux-$KERNEL_VERSION-camera1"
 CAMERA_MODULE_HELPER="$SCRIPT_DIR/ensure-camera-module.sh"
 ESP=/efi
 fail() { echo "ERROR: $*" >&2; exit 1; }
+mode=${1:-install}
+[[ $# -le 1 && ( $mode == install || $mode == build ) ]] || fail 'Usage: build-linux-kernel.sh [install|build]'
 [[ $EUID -ne 0 ]] || fail 'Run as your desktop user.'
 [[ $(uname -m) == x86_64 && $(cat /sys/class/dmi/id/product_sku) == Surface_Pro_11th_Edition_With_Intel_For_Business_2103 ]] || fail 'Only Intel Surface Pro 11 SKU 2103 is supported.'
 [[ $(uname -r) != "$KERNEL_RELEASE" ]] || fail 'Boot another kernel before rebuilding this release.'
-mountpoint -q "$ESP" && sudo test -d "$ESP/loader" || fail 'Mount the systemd-boot ESP at /efi.'
-command -v dracut >/dev/null || command -v mkinitcpio >/dev/null || fail 'Install dracut or mkinitcpio first.'
-sudo pacman -S --needed base-devel git bc pahole cpio libelf ncurses curl tar xz zstd python
+if [[ $mode == install ]]; then
+  mountpoint -q "$ESP" && sudo test -d "$ESP/loader" || fail 'Mount the systemd-boot ESP at /efi.'
+  command -v dracut >/dev/null || command -v mkinitcpio >/dev/null || fail 'Install dracut or mkinitcpio first.'
+  sudo pacman -S --needed base-devel git bc pahole cpio libelf ncurses curl tar xz zstd python
+fi
 mkdir -p "$WORK_DIR"
 archive="$WORK_DIR/linux-$KERNEL_VERSION.tar.xz"
 if [[ ! -f $archive ]]; then
@@ -31,7 +42,7 @@ if [[ ! -d $KERNEL_DIR ]]; then
 fi
 bash "$SCRIPT_DIR/apply-kernel-patches.sh" "$KERNEL_DIR"
 cd "$KERNEL_DIR"
-echo "=== [6/11] Preparing Kernel Configuration ==="
+echo "Preparing kernel configuration"
 if [ -f .config ]; then
     echo "[+] Existing .config found, keeping current configuration."
 elif [ -f /proc/config.gz ]; then
@@ -43,21 +54,21 @@ else
     fail "No running kernel configuration found; supply a working .config in $KERNEL_DIR."
 fi
 
-scripts/config --enable CONFIG_STAGING
-scripts/config --enable CONFIG_VIDEO_INTEL_IPU7
-scripts/config --module CONFIG_VIDEO_IMX681
-scripts/config --module CONFIG_VIDEO_OV13858
-scripts/config --module CONFIG_INTEL_SKL_INT3472
-scripts/config --disable CONFIG_LOCALVERSION_AUTO
-scripts/config --disable CONFIG_RUST
-scripts/config --set-str CONFIG_LOCALVERSION "$CUSTOM_SUFFIX"
-
-scripts/config --enable CONFIG_SOUNDWIRE
-scripts/config --enable CONFIG_SOUNDWIRE_INTEL
-scripts/config --enable CONFIG_SND_SOC_SOF_INTEL_LNL
-scripts/config --module CONFIG_SND_SOC_RT1320_SDW
+# Apply only our explicit overrides; leave the base driver configuration intact.
+while IFS='=' read -r symbol value; do
+    [[ -n $symbol && $symbol != \#* ]] || continue
+    case "$value" in
+        y) scripts/config --enable "$symbol" ;;
+        m) scripts/config --module "$symbol" ;;
+        n) scripts/config --disable "$symbol" ;;
+        '"@CUSTOM_SUFFIX@"') scripts/config --set-str "$symbol" "$CUSTOM_SUFFIX" ;;
+        *) fail "Invalid Surface kernel override: $symbol=$value" ;;
+    esac
+done < "$SCRIPT_DIR/surface11.config"
 
 make olddefconfig
+
+grep -q '^CONFIG_BT_INTEL_PCIE=m$' .config || fail 'Intel PCIe Bluetooth driver was not enabled.'
 
 if ! grep -q '^CONFIG_VIDEO_IMX681=m$' .config ||
    ! grep -q '^CONFIG_VIDEO_OV13858=m$' .config; then
@@ -68,16 +79,21 @@ fi
 
 echo "[+] IMX681 will be built as a kernel module."
 
-echo "=== [7/11] Incremental compile ==="
+echo "Building kernel (incremental)"
 echo "[*] Compiling (incremental – only changed objects will be rebuilt)..."
 make -j"${SURFACE11_BUILD_JOBS:-$(nproc)}"
 
-echo "=== [8/11] Installing modules ==="
 ACTUAL_KERNEL_RELEASE=$(make -s kernelrelease)
 [[ $ACTUAL_KERNEL_RELEASE == "$KERNEL_RELEASE" ]] || { echo "Unexpected kernel release: $ACTUAL_KERNEL_RELEASE" >&2; exit 1; }
+if [[ $mode == build ]]; then
+  echo "Built $ACTUAL_KERNEL_RELEASE in $KERNEL_DIR. Run the kernel command with the same SURFACE11_BUILD_DIR to install."
+  exit 0
+fi
+
+echo "Installing modules"
 sudo make modules_install
 
-echo "=== [9/11] Installing kernel image to ESP ($ESP) ==="
+echo "Installing kernel image to ESP ($ESP)"
 ACTUAL_KERNEL_RELEASE=$(make -s kernelrelease)
 echo "[*] Actual kernelrelease: $ACTUAL_KERNEL_RELEASE"
 
@@ -94,33 +110,34 @@ if ! mountpoint -q "$ESP"; then
     exit 1
 fi
 
-# Keep the previous custom boot assets recoverable; leave other kernels alone.
+# Version each release so the working custom entry remains a bootable fallback.
+# Back up this release only when reinstalling it; leave other kernels alone.
 BACKUP_DIR="$ESP/surface11-backups/$(date +%Y%m%d-%H%M%S)"
-if sudo test -f "$ESP/vmlinuz-linux-surface11-camera1"; then
+if sudo test -f "$ESP/vmlinuz-$BOOT_STEM"; then
     sudo mkdir -p "$BACKUP_DIR"
-    for file in vmlinuz-linux-surface11-camera1 initramfs-linux-surface11-camera1.img System.map-linux-surface11-camera1 config-linux-surface11-camera1 loader/entries/surface11-camera1.conf; do
+    for file in "vmlinuz-$BOOT_STEM" "initramfs-$BOOT_STEM.img" "System.map-$BOOT_STEM" "config-$BOOT_STEM" "loader/entries/$ENTRY_NAME"; do
         ! sudo test -f "$ESP/$file" || sudo cp -a "$ESP/$file" "$BACKUP_DIR/"
     done
     echo "[+] Previous custom boot assets saved in $BACKUP_DIR"
 fi
 
-sudo cp -v arch/x86/boot/bzImage "$ESP/vmlinuz-linux-surface11-camera1"
-sudo cp -v System.map           "$ESP/System.map-linux-surface11-camera1"
-sudo cp -v .config              "$ESP/config-linux-surface11-camera1"
+sudo cp -v arch/x86/boot/bzImage "$ESP/vmlinuz-$BOOT_STEM"
+sudo cp -v System.map           "$ESP/System.map-$BOOT_STEM"
+sudo cp -v .config              "$ESP/config-$BOOT_STEM"
 
-echo "=== [10/11] Generating initramfs ==="
+echo "Generating initramfs"
 if command -v dracut &>/dev/null; then
     echo "[*] Using dracut..."
-    sudo dracut --force "$ESP/initramfs-linux-surface11-camera1.img" "$ACTUAL_KERNEL_RELEASE"
+    sudo dracut --force "$ESP/initramfs-$BOOT_STEM.img" "$ACTUAL_KERNEL_RELEASE"
 elif command -v mkinitcpio &>/dev/null; then
     echo "[*] Using mkinitcpio..."
-    sudo mkinitcpio -k "$ACTUAL_KERNEL_RELEASE" -g "$ESP/initramfs-linux-surface11-camera1.img"
+    sudo mkinitcpio -k "$ACTUAL_KERNEL_RELEASE" -g "$ESP/initramfs-$BOOT_STEM.img"
 else
     echo "[-] Neither dracut nor mkinitcpio found."
     exit 1
 fi
 
-echo "=== [11/11] Creating systemd-boot entry ==="
+echo "Creating systemd-boot entry"
 sudo mkdir -p "$ESP/loader/entries"
 
 BOOT_OPTIONS=$(python3 - <<'PYOPTS'
@@ -134,12 +151,12 @@ print(' '.join('"' + x.replace('"', '\\"') + '"' if any(c.isspace() for c in x) 
 PYOPTS
 )
 
-ENTRY_FILE="$ESP/loader/entries/surface11-camera1.conf"
+ENTRY_FILE="$ESP/loader/entries/$ENTRY_NAME"
 
 sudo tee "$ENTRY_FILE" > /dev/null <<EOF
 title   Linux Surface11 Cameras ($KERNEL_RELEASE)
-linux   /vmlinuz-linux-surface11-camera1
-initrd  /initramfs-linux-surface11-camera1.img
+linux   /vmlinuz-$BOOT_STEM
+initrd  /initramfs-$BOOT_STEM.img
 options $BOOT_OPTIONS
 EOF
 
@@ -148,8 +165,8 @@ echo "=============================================="
 echo "  Installation complete!"
 echo "=============================================="
 echo
-echo "Kernel:     $ESP/vmlinuz-linux-surface11-camera1"
-echo "Initramfs:  $ESP/initramfs-linux-surface11-camera1.img"
+echo "Kernel:     $ESP/vmlinuz-$BOOT_STEM"
+echo "Initramfs:  $ESP/initramfs-$BOOT_STEM.img"
 echo "Modules:    /lib/modules/$ACTUAL_KERNEL_RELEASE"
 echo "Boot entry: $ENTRY_FILE"
 echo

@@ -41,7 +41,10 @@ CONFIG
   sudo install -m 644 "$staging/"* "$source_dir/"
   changed=1
 fi
-if ! dkms status -m v4l2loopback -v "$version" | rg -q '^v4l2loopback/'; then
+# Consume the complete output: with pipefail, an early-exiting `rg -q` can
+# SIGPIPE DKMS and misreport a registered module as absent.
+registration=$(dkms status -m v4l2loopback -v "$version") || fail 'Cannot read DKMS registration.'
+if [[ -z $registration ]]; then
   sudo dkms add -m v4l2loopback -v "$version"
 fi
 shopt -s nullglob

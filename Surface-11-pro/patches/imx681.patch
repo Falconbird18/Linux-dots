@@ -1,3 +1,31 @@
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -298,6 +298,15 @@
+ 
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called imx471.
++
++config VIDEO_IMX681
++	tristate "Sony IMX681 sensor support"
++	select V4L2_CCI_I2C
++	help
++	  This is a Video4Linux2 sensor driver for the Sony IMX681 camera.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called imx681.
+ 
+ config VIDEO_IMX678
+ 	tristate "Sony IMX678 sensor support"
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -63,6 +63,7 @@
+ obj-$(CONFIG_VIDEO_IMX415) += imx415.o
+ obj-$(CONFIG_VIDEO_IMX678) += imx678.o
+ obj-$(CONFIG_VIDEO_IMX471) += imx471.o
++obj-$(CONFIG_VIDEO_IMX681) += imx681.o
+ obj-$(CONFIG_VIDEO_IR_I2C) += ir-kbd-i2c.o
+ obj-$(CONFIG_VIDEO_ISL7998X) += isl7998x.o
+ obj-$(CONFIG_VIDEO_KS0127) += ks0127.o
 --- /dev/null
 +++ b/drivers/media/i2c/imx681.c
 @@ -0,0 +1,1031 @@
